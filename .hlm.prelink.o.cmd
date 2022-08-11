@@ -1,0 +1,1 @@
+cmd_/home/daniele/SOA/SOA/hlm.prelink.o := ld -m elf_x86_64   -r -o /home/daniele/SOA/SOA/hlm.prelink.o  --whole-archive /home/daniele/SOA/SOA/hlm.o  ; ./tools/objtool/objtool orc generate  --module  --lto --ibt  --no-fp   --retpoline  --rethunk  --uaccess   --sls /home/daniele/SOA/SOA/hlm.prelink.o
