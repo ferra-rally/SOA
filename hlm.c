@@ -7,6 +7,7 @@
 #include <linux/pid.h>
 #include <linux/version.h>
 #include <linux/workqueue.h>
+#include <linux/syscalls.h>
 #include "lib/include/scth.h"
 
 MODULE_LICENSE("GPL");
@@ -149,10 +150,29 @@ static ssize_t print_stream_everywhere(const char *stream, size_t size ) {
 }
 
 
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)
+__SYSCALL_DEFINEx(1, _ioctl, int, request_code){
+#else
+asmlinkage long sys_ioctl(int request_code){
+#endif
+        
+    printk("%s: work with request code: %d\n",MODNAME,request_code);
+        
+	return 0;
+}
+
+
+
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)
+long sys_ioctl = (unsigned long) __x64_sys_ioctl;       
+#else
+#endif
+
 
 int init_module(void)
 {
 	int ret;
+	int i;
 
 	Major = register_chrdev(0, DEVICE_NAME, &fops);
 
@@ -165,6 +185,8 @@ int init_module(void)
 
 	printk("%s: received sys_call_table address %px\n",MODNAME,(void*)the_syscall_table);
 
+	new_sys_call_array[0] = (unsigned long)sys_ioctl;
+
 	ret = get_entries(restore,HACKED_ENTRIES,(unsigned long*)the_syscall_table,&the_ni_syscall);
 
 
@@ -172,6 +194,17 @@ int init_module(void)
         printk("%s: could not hack %d entries (just %d)\n",MODNAME,HACKED_ENTRIES,ret);
         return -1;
     }
+
+    unprotect_memory();
+
+    for(i=0;i<HACKED_ENTRIES;i++){
+    	((unsigned long *)the_syscall_table)[restore[i]] = (unsigned long)new_sys_call_array[i];
+    }
+
+    protect_memory();
+
+    printk("%s: all new system-calls correctly installed on sys-call table\n",MODNAME);
+
     printk("%s: hack %d entries (just %d)\n",MODNAME,HACKED_ENTRIES,ret);
 
 	wq = create_singlethread_workqueue("hlm_wq");
@@ -184,6 +217,7 @@ int init_module(void)
 
 void cleanup_module(void)
 {
+	int i;
 
 	unregister_chrdev(Major, DEVICE_NAME);
 	printk(KERN_INFO "Hlm device unregistered, it was assigned major number %d\n", Major);
@@ -199,5 +233,13 @@ void cleanup_module(void)
 
     destroy_workqueue(wq);
     printk(KERN_INFO "Work queue destroyied\n");
+
+    unprotect_memory();
+
+    for(i=0;i<HACKED_ENTRIES;i++){
+            ((unsigned long *)the_syscall_table)[restore[i]] = the_ni_syscall;
+    }
+    protect_memory();
+    printk("%s: sys-call table restored to its original content\n",MODNAME);
 }
 

@@ -6,3 +6,4 @@ hlm.o
 hlm.prelink.o
 modules.order
 Module.symvers
+user/a.out
