@@ -17,17 +17,6 @@ MODULE_AUTHOR("Daniele Ferrarelli");
 #define MODNAME "HLM"
 #define LINE_SIZE 30
 
-unsigned long the_syscall_table = 0x0;
-module_param(the_syscall_table, ulong, 0660);
-
-unsigned long the_ni_syscall;
-
-unsigned long new_sys_call_array[] = {0x0};//please set to sys_put_work at startup
-#define HACKED_ENTRIES (int)(sizeof(new_sys_call_array)/sizeof(unsigned long))
-int restore[HACKED_ENTRIES] = {[0 ... (HACKED_ENTRIES-1)] -1};
-
-static ssize_t print_stream_everywhere(const char *, size_t );
-
 static int hlm_open(struct inode *, struct file *);
 static int hlm_release(struct inode *, struct file *);
 static ssize_t hlm_write(struct file *, const char *, size_t, loff_t *);
@@ -60,6 +49,7 @@ struct work_data {
 
 struct element *head = NULL;
 struct element *tail = NULL;
+int priority = 0;
 
 static void work_handler(struct work_struct *work){
     struct work_data * data = (struct work_data *)work;
@@ -87,7 +77,7 @@ static int hlm_open(struct inode *inode, struct file *file) {
 
 	printk("%s: hlm dev closed\n",MODNAME);
 	//device opened by a default nop
-  	 return 0;
+  	return 0;
 }
 
 
@@ -101,19 +91,38 @@ static int hlm_release(struct inode *inode, struct file *file) {
 
 
 static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t *off) {
-	printk("%s: hlm called with [major,minor] number [%d,%d]\n",MODNAME,get_major(filp),get_minor(filp));
+	printk("%s: write called with priority %d\n",MODNAME,priority);
+
+	char buffer[30];
+	int ret;
 
 	if(len >= LINE_SIZE) return -1;
-
-	struct work_data * data;
-	data = kmalloc(sizeof(struct work_data), GFP_KERNEL);
+	
 	//ret = 
-	copy_from_user(data->data,buff,len);
+	ret = copy_from_user(buffer,buff,len);
 
-	INIT_WORK(&data->work, work_handler);
-	queue_work(wq, &data->work);
+	if(priority) {
+		struct element *node = kmalloc(sizeof(struct element), GFP_KERNEL);
+		memcpy(node->data, buffer, 30);
+		spin_lock(&list_spinlock);
+	    if(head == NULL) {
+	    	head = node;
+	    	tail = node;
+	    } else {
+	    	tail->next = node;
+	    	tail = node;
+	    }
+	    spin_unlock(&list_spinlock);
+	} else {
+		struct work_data * data;
+		data = kmalloc(sizeof(struct work_data), GFP_KERNEL);
+		memcpy(data->data, buffer, 30);
 
-	return print_stream_everywhere(buff, len);
+		INIT_WORK(&data->work, work_handler);
+		queue_work(wq, &data->work);
+	}
+
+	return len;
 }
 
 static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) {
@@ -134,45 +143,46 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 	return 0;
 }
 
+#define CHG_PRT 0
+
+static long hlm_ioctl(struct file *filp, unsigned int command, unsigned long param) {
+  	int32_t value;
+
+  	copy_from_user(&value ,(int32_t*) param, sizeof(value));
+  	//object_state *the_object;
+
+  	//the_object = objects + minor;
+
+  	printk("%s: somebody called an ioctl on dev with [major,minor] number [%d,%d] and command %u \n",MODNAME,get_major(filp),get_minor(filp),command);
+
+  	switch(command) {
+        case CHG_PRT:
+	        if(value != 0 && value != 1) {
+		    	printk("%s: invalid priority %d\n",MODNAME,value);
+		    } else {
+		    	printk("%s: changed priority to %d\n",MODNAME,value);
+		    	priority = value;
+		    }
+        default:
+            printk("%s: default\n",MODNAME);
+            break;
+     }
+
+  return 0;
+
+}
+
 static struct file_operations fops = {
   .owner = THIS_MODULE,
   .write = hlm_write,
   .read = hlm_read,
   .open =  hlm_open,
+  .unlocked_ioctl = hlm_ioctl,
   .release = hlm_release
 };
 
-
-static ssize_t print_stream_everywhere(const char *stream, size_t size ) {
-	printk("%s: print stream function of broadcast dev called\n",MODNAME);
-
-	return size;
-}
-
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)
-__SYSCALL_DEFINEx(1, _ioctl, int, request_code){
-#else
-asmlinkage long sys_ioctl(int request_code){
-#endif
-        
-    printk("%s: work with request code: %d\n",MODNAME,request_code);
-        
-	return 0;
-}
-
-
-
-#if LINUX_VERSION_CODE >= KERNEL_VERSION(4,17,0)
-long sys_ioctl = (unsigned long) __x64_sys_ioctl;       
-#else
-#endif
-
-
 int init_module(void)
 {
-	int ret;
-	int i;
 
 	Major = register_chrdev(0, DEVICE_NAME, &fops);
 
@@ -183,41 +193,18 @@ int init_module(void)
 
 	printk(KERN_INFO "Hlm device registered, it is assigned major number %d\n", Major);
 
-	printk("%s: received sys_call_table address %px\n",MODNAME,(void*)the_syscall_table);
-
-	new_sys_call_array[0] = (unsigned long)sys_ioctl;
-
-	ret = get_entries(restore,HACKED_ENTRIES,(unsigned long*)the_syscall_table,&the_ni_syscall);
-
-
-    if (ret != HACKED_ENTRIES){
-        printk("%s: could not hack %d entries (just %d)\n",MODNAME,HACKED_ENTRIES,ret);
-        return -1;
-    }
-
-    unprotect_memory();
-
-    for(i=0;i<HACKED_ENTRIES;i++){
-    	((unsigned long *)the_syscall_table)[restore[i]] = (unsigned long)new_sys_call_array[i];
-    }
-
-    protect_memory();
-
-    printk("%s: all new system-calls correctly installed on sys-call table\n",MODNAME);
-
-    printk("%s: hack %d entries (just %d)\n",MODNAME,HACKED_ENTRIES,ret);
-
 	wq = create_singlethread_workqueue("hlm_wq");
 	if(wq == 0) {
 		printk(KERN_ERR "Work queue creation failed\n");
 	}
+
+    printk("%s: device started with priority %d\n",MODNAME,priority);
 
 	return 0;
 }
 
 void cleanup_module(void)
 {
-	int i;
 
 	unregister_chrdev(Major, DEVICE_NAME);
 	printk(KERN_INFO "Hlm device unregistered, it was assigned major number %d\n", Major);
@@ -233,13 +220,5 @@ void cleanup_module(void)
 
     destroy_workqueue(wq);
     printk(KERN_INFO "Work queue destroyied\n");
-
-    unprotect_memory();
-
-    for(i=0;i<HACKED_ENTRIES;i++){
-            ((unsigned long *)the_syscall_table)[restore[i]] = the_ni_syscall;
-    }
-    protect_memory();
-    printk("%s: sys-call table restored to its original content\n",MODNAME);
 }
 

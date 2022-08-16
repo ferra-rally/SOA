@@ -7,3 +7,4 @@ hlm.prelink.o
 modules.order
 Module.symvers
 user/a.out
+user/test

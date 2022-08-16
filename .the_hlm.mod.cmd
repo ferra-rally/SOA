@@ -1,1 +1,1 @@
-cmd_/home/daniele/SOA/SOA/the_hlm.mod := { echo  /home/daniele/SOA/SOA/hlm.o /home/daniele/SOA/SOA/lib/scth.o;  echo; } > /home/daniele/SOA/SOA/the_hlm.mod
+cmd_/home/daniele/SOA/SOA/the_hlm.mod := printf '%s\n'   hlm.o lib/scth.o | awk '!x[$$0]++ { print("/home/daniele/SOA/SOA/"$$0) }' > /home/daniele/SOA/SOA/the_hlm.mod

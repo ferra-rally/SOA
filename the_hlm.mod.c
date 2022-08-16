@@ -2,6 +2,7 @@
 #define INCLUDE_VERMAGIC
 #include <linux/build-salt.h>
 #include <linux/elfnote-lto.h>
+#include <linux/export-internal.h>
 #include <linux/vermagic.h>
 #include <linux/compiler.h>
 
@@ -28,4 +29,4 @@ MODULE_INFO(retpoline, "Y");
 MODULE_INFO(depends, "");
 
 
-MODULE_INFO(srcversion, "676E4D99AF4BCA50F3B80CF");
+MODULE_INFO(srcversion, "CAC75A22D6A8CF47EEE0CFF");

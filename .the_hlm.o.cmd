@@ -1,1 +1,3 @@
-cmd_/home/daniele/SOA/SOA/the_hlm.o := echo >/dev/null; rm -f /home/daniele/SOA/SOA/the_hlm.o; ar cDPrsT /home/daniele/SOA/SOA/the_hlm.o /home/daniele/SOA/SOA/hlm.o /home/daniele/SOA/SOA/lib/scth.o
+cmd_/home/daniele/SOA/SOA/the_hlm.o := ld -m elf_x86_64   -r -o /home/daniele/SOA/SOA/the_hlm.o @/home/daniele/SOA/SOA/the_hlm.mod  ; ./tools/objtool/objtool  --hacks=jump_label  --hacks=noinstr  --ibt   --orc  --retpoline  --rethunk  --sls   --static-call  --uaccess  --link  --module  /home/daniele/SOA/SOA/the_hlm.o
+
+/home/daniele/SOA/SOA/the_hlm.o: $(wildcard ./tools/objtool/objtool)

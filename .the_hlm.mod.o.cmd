@@ -29,6 +29,7 @@ deps_/home/daniele/SOA/SOA/the_hlm.mod.o := \
     $(wildcard include/config/STACKTRACE_BUILD_ID) \
     $(wildcard include/config/CFI_CLANG) \
     $(wildcard include/config/MODULE_SIG) \
+    $(wildcard include/config/ARCH_WANTS_MODULES_DATA_IN_VMALLOC) \
     $(wildcard include/config/GENERIC_BUG) \
     $(wildcard include/config/KALLSYMS) \
     $(wildcard include/config/SMP) \
@@ -52,7 +53,7 @@ deps_/home/daniele/SOA/SOA/the_hlm.mod.o := \
   include/linux/compiler.h \
     $(wildcard include/config/TRACE_BRANCH_PROFILING) \
     $(wildcard include/config/PROFILE_ALL_BRANCHES) \
-    $(wildcard include/config/STACK_VALIDATION) \
+    $(wildcard include/config/OBJTOOL) \
   include/linux/compiler_types.h \
   arch/x86/include/generated/asm/rwonce.h \
   include/asm-generic/rwonce.h \
@@ -118,7 +119,6 @@ deps_/home/daniele/SOA/SOA/the_hlm.mod.o := \
     $(wildcard include/config/ARCH_USE_SYM_ANNOTATIONS) \
   include/linux/export.h \
     $(wildcard include/config/MODVERSIONS) \
-    $(wildcard include/config/MODULE_REL_CRCS) \
     $(wildcard include/config/HAVE_ARCH_PREL32_RELOCATIONS) \
     $(wildcard include/config/TRIM_UNUSED_KSYMS) \
   arch/x86/include/asm/linkage.h \
@@ -229,6 +229,7 @@ deps_/home/daniele/SOA/SOA/the_hlm.mod.o := \
   include/linux/jump_label.h \
     $(wildcard include/config/HAVE_ARCH_JUMP_LABEL_RELATIVE) \
   arch/x86/include/asm/jump_label.h \
+    $(wildcard include/config/HAVE_JUMP_LABEL_HACK) \
   include/linux/objtool.h \
     $(wildcard include/config/FRAME_POINTER) \
   arch/x86/include/asm/cpufeatures.h \
@@ -240,9 +241,9 @@ deps_/home/daniele/SOA/SOA/the_hlm.mod.o := \
     $(wildcard include/config/X86_P6_NOP) \
     $(wildcard include/config/MATOM) \
   arch/x86/include/asm/disabled-features.h \
-    $(wildcard include/config/X86_SMAP) \
     $(wildcard include/config/X86_UMIP) \
     $(wildcard include/config/INTEL_IOMMU_SVM) \
+    $(wildcard include/config/INTEL_TDX_GUEST) \
   arch/x86/include/asm/msr-index.h \
   include/linux/bits.h \
   include/vdso/bits.h \
@@ -374,10 +375,12 @@ deps_/home/daniele/SOA/SOA/the_hlm.mod.o := \
   arch/x86/include/asm/bug.h \
     $(wildcard include/config/DEBUG_BUGVERBOSE) \
   include/linux/instrumentation.h \
+    $(wildcard include/config/NOINSTR_VALIDATION) \
   include/asm-generic/bug.h \
     $(wildcard include/config/BUG) \
     $(wildcard include/config/GENERIC_BUG_RELATIVE_POINTERS) \
   arch/x86/include/uapi/asm/msr.h \
+  arch/x86/include/asm/shared/msr.h \
   include/linux/tracepoint-defs.h \
   arch/x86/include/asm/paravirt.h \
     $(wildcard include/config/PARAVIRT_SPINLOCKS) \
@@ -422,6 +425,7 @@ deps_/home/daniele/SOA/SOA/the_hlm.mod.o := \
     $(wildcard include/config/ARCH_WANT_BATCHED_UNMAP_TLB_FLUSH) \
     $(wildcard include/config/HUGETLB_PAGE) \
     $(wildcard include/config/IOMMU_SVA) \
+    $(wildcard include/config/KSM) \
   include/linux/mm_types_task.h \
     $(wildcard include/config/SPLIT_PTLOCK_CPUS) \
     $(wildcard include/config/ARCH_ENABLE_SPLIT_PMD_PTLOCK) \
@@ -543,7 +547,6 @@ deps_/home/daniele/SOA/SOA/the_hlm.mod.o := \
     $(wildcard include/config/WQ_WATCHDOG) \
   include/linux/timer.h \
     $(wildcard include/config/DEBUG_OBJECTS_TIMERS) \
-    $(wildcard include/config/NO_HZ_COMMON) \
   include/linux/ktime.h \
   include/linux/jiffies.h \
   include/vdso/jiffies.h \
@@ -567,10 +570,6 @@ deps_/home/daniele/SOA/SOA/the_hlm.mod.o := \
     $(wildcard include/config/HAVE_ARCH_NODE_DEV_GROUP) \
   include/generated/bounds.h \
   include/linux/seqlock.h \
-  include/linux/ww_mutex.h \
-    $(wildcard include/config/DEBUG_RT_MUTEXES) \
-    $(wildcard include/config/DEBUG_WW_MUTEX_SLOWPATH) \
-  include/linux/rtmutex.h \
   arch/x86/include/asm/mmu.h \
     $(wildcard include/config/MODIFY_LDT_SYSCALL) \
   include/linux/kmod.h \
@@ -604,21 +603,20 @@ deps_/home/daniele/SOA/SOA/the_hlm.mod.o := \
     $(wildcard include/config/ARCH_USES_PG_UNCACHED) \
     $(wildcard include/config/MEMORY_FAILURE) \
     $(wildcard include/config/PAGE_IDLE_FLAG) \
-    $(wildcard include/config/HUGETLB_PAGE_FREE_VMEMMAP) \
-    $(wildcard include/config/HUGETLB_PAGE_FREE_VMEMMAP_DEFAULT_ON) \
-    $(wildcard include/config/KSM) \
+    $(wildcard include/config/HUGETLB_PAGE_OPTIMIZE_VMEMMAP) \
+    $(wildcard include/config/HUGETLB_PAGE_OPTIMIZE_VMEMMAP_DEFAULT_ON) \
   include/linux/local_lock.h \
   include/linux/local_lock_internal.h \
   include/linux/memory_hotplug.h \
     $(wildcard include/config/HAVE_ARCH_NODEDATA_EXTENSION) \
     $(wildcard include/config/ARCH_HAS_ADD_PAGES) \
     $(wildcard include/config/MEMORY_HOTREMOVE) \
+    $(wildcard include/config/MHP_MEMMAP_ON_MEMORY) \
   arch/x86/include/asm/mmzone.h \
   arch/x86/include/asm/mmzone_64.h \
   include/linux/topology.h \
     $(wildcard include/config/USE_PERCPU_NUMA_NODE_ID) \
     $(wildcard include/config/SCHED_SMT) \
-    $(wildcard include/config/SCHED_CLUSTER) \
   include/linux/arch_topology.h \
     $(wildcard include/config/ACPI_CPPC_LIB) \
     $(wildcard include/config/GENERIC_ARCH_TOPOLOGY) \
@@ -681,6 +679,7 @@ deps_/home/daniele/SOA/SOA/the_hlm.mod.o := \
   include/linux/elfnote.h \
   include/linux/elfnote-lto.h \
     $(wildcard include/config/LTO) \
+  include/linux/export-internal.h \
   include/linux/vermagic.h \
     $(wildcard include/config/PREEMPT_BUILD) \
   include/generated/utsrelease.h \
