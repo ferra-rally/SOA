@@ -46,8 +46,11 @@ static int hlm_release(struct inode *, struct file *);
 static ssize_t hlm_write(struct file *, const char *, size_t, loff_t *);
 static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off);
 
-unsigned long bytes __attribute__((aligned(8)));
-module_param(bytes,ulong,0660);
+unsigned long bytes_hi __attribute__((aligned(8)));
+module_param(bytes_hi,ulong,0660);
+
+unsigned long bytes_lo __attribute__((aligned(8)));
+module_param(bytes_lo,ulong,0660);
 
 #define DEVICE_NAME "hlm"  /* Device file name in /dev/ - not mandatory  */
 
@@ -59,7 +62,8 @@ module_param(bytes,ulong,0660);
 #define get_minor(session)      MINOR(session->f_dentry->d_inode->i_rdev)
 #endif
 
-DEFINE_SPINLOCK(list_spinlock);
+DEFINE_SPINLOCK(list_spinlock_hi);
+DEFINE_SPINLOCK(list_spinlock_lo);
 
 static int Major;            /* Major number assigned to broadcast device driver */
 struct workqueue_struct *wq;	// Workqueue for async add
@@ -86,9 +90,14 @@ struct work_data {
     char data[30];
 };
 
-struct element *head = NULL;
-struct element *tail = NULL;
-int priority = 0;
+struct element *head_hi = NULL;
+struct element *tail_hi = NULL;
+
+struct element *head_lo = NULL;
+struct element *tail_lo = NULL;
+
+int data_aval_hi = 0;
+int data_aval_lo = 0;
 
 static void work_handler(struct work_struct *work){
     struct work_data * data = (struct work_data *)work;
@@ -98,19 +107,19 @@ static void work_handler(struct work_struct *work){
     //TODO temp
     memcpy(node->data, container_of((void*)data,struct work_data, work)->data, 30);
 
-    spin_lock(&list_spinlock);
+    spin_lock(&list_spinlock_lo);
 
     //atomic_inc((atomic_t*)&bytes);
-    bytes += strlen(node->data);
+    bytes_lo += strlen(node->data);
 
-    if(head == NULL) {
-    	head = node;
-    	tail = node;
+    if(head_lo == NULL) {
+    	head_lo = node;
+    	tail_lo = node;
     } else {
-    	tail->next = node;
-    	tail = node;
+    	tail_lo->next = node;
+    	tail_lo = node;
     }
-    spin_unlock(&list_spinlock);
+    spin_unlock(&list_spinlock_lo);
 
     printk(KERN_INFO "Added element\n");
     kfree(data);
@@ -142,10 +151,11 @@ static int hlm_release(struct inode *inode, struct file *file) {
 
 
 static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t *off) {
-	printk("%s: write called with priority %d\n",MODNAME,priority);
-
 	char buffer[30];
 	int ret;
+	int priority = objects[get_minor(filp)].priority;
+
+	printk("%s: write called with priority %d\n",MODNAME,priority);
 
 	if(len >= LINE_SIZE) return -1;
 	
@@ -156,20 +166,20 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 		struct element *node = kmalloc(sizeof(struct element), GFP_KERNEL);
 
 		memcpy(node->data, buffer, 30);
-		spin_lock(&list_spinlock);
+		spin_lock(&list_spinlock_hi);
 
 		//Atomic?
 		//atomic_inc((atomic_t*)&bytes);
-		bytes += len;
+		bytes_hi += len;
 
-	    if(head == NULL) {
-	    	head = node;
-	    	tail = node;
+	    if(head_hi == NULL) {
+	    	head_hi = node;
+	    	tail_hi = node;
 	    } else {
-	    	tail->next = node;
-	    	tail = node;
+	    	tail_hi->next = node;
+	    	tail_hi = node;
 	    }
-	    spin_unlock(&list_spinlock);
+	    spin_unlock(&list_spinlock_hi);
 	} else {
 		struct work_data * data;
 		data = kmalloc(sizeof(struct work_data), GFP_KERNEL);
@@ -185,16 +195,41 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) {
 	int ret = 0;
 
-	if(head != NULL) {
-		spin_lock(&list_spinlock);
-		printk(KERN_INFO "HLM output: %s\n", head->data);
-		struct element *tmp = head;
-		head = head->next;
+
+	int priority = objects[get_minor(filp)].priority;
+	struct element **head;
+
+	if(priority) {
+		head = &head_hi;
+	} else {
+		head = &head_lo;
+	}
+
+	printk("%s: read called with priority %d\n",MODNAME,priority);
+
+	if(*head != NULL) {
+		if(priority) {
+			spin_lock(&list_spinlock_hi);
+		} else {
+			spin_lock(&list_spinlock_lo);
+		}
+		printk(KERN_INFO "HLM output: %s\n", (*head)->data);
+		struct element *tmp = *head;
+		*head = (*head)->next;
 
 		//TODO atomic?
 		//atomic_dec((atomic_t*)&bytes);
-		bytes -= strlen(tmp->data);
-		spin_unlock(&list_spinlock);
+		if(priority) {
+			bytes_hi -= strlen(tmp->data);
+		} else {
+			bytes_lo -= strlen(tmp->data);
+		}
+
+		if(priority) {
+			spin_unlock(&list_spinlock_hi);
+		} else {
+			spin_unlock(&list_spinlock_lo);
+		}
 
 		ret = copy_to_user(buff,tmp->data,30);
 		kfree(tmp);
@@ -319,9 +354,15 @@ void cleanup_module(void)
 	flush_workqueue(wq);
 
 	// Empty queue
-	while(head != NULL) {
-		struct element *tmp = head;
-		head = head->next;
+	while(head_hi != NULL) {
+		struct element *tmp = head_hi;
+		head_hi = head_hi->next;
+		kfree(tmp);
+	}
+
+	while(head_lo != NULL) {
+		struct element *tmp = head_lo;
+		head_lo = head_lo->next;
 		kfree(tmp);
 	}
 
