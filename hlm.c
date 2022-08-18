@@ -120,6 +120,7 @@ static int hlm_open(struct inode *inode, struct file *file) {
 	int minor;
 	minor = get_minor(file);
 
+	printk("%s: minor %d enabled: %d block: %d priority: %d timeout: %lu\n",MODNAME, minor, objects[minor].enabled, objects[minor].block, objects[minor].priority, objects[minor].timeout);
 	if(0 == objects[minor].enabled){
 		printk("%s: object with %d is disabled\n",MODNAME, minor);
 		return -ENODEV;
@@ -282,12 +283,12 @@ int init_module(void)
 
 	//Enable all minors
 	for(i=0;i<MINORS;i++){
-		object_state obj = objects[i];
+		object_state *obj = objects + i;
 
-		obj.enabled = 1;
-		obj.timeout = 1000;
-		obj.block = 0;
-		obj.priority = 0;
+		obj->enabled = 1;
+		obj->timeout = 1000;
+		obj->block = 0;
+		obj->priority = 0;
 	}
 
 	Major = __register_chrdev(0, 0, 120, DEVICE_NAME, &fops);
@@ -304,7 +305,7 @@ int init_module(void)
 		printk(KERN_ERR "Work queue creation failed\n");
 	}
 
-    printk("%s: device started with priority %d\n",MODNAME,priority);
+    printk("%s: started\n",MODNAME);
 
 	return 0;
 }
