@@ -52,6 +52,15 @@ module_param(bytes_hi,ulong,0660);
 unsigned long bytes_lo __attribute__((aligned(8)));
 module_param(bytes_lo,ulong,0660);
 
+int major_number;
+module_param(major_number,int,0660);
+
+int asleep_hi;
+module_param(asleep_hi,int,0660);
+
+int asleep_lo;
+module_param(asleep_lo,int,0660);
+
 #define DEVICE_NAME "hlm"  /* Device file name in /dev/ - not mandatory  */
 
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(4, 0, 0)
@@ -64,6 +73,9 @@ module_param(bytes_lo,ulong,0660);
 
 DEFINE_SPINLOCK(list_spinlock_hi);
 DEFINE_SPINLOCK(list_spinlock_lo);
+
+DECLARE_WAIT_QUEUE_HEAD(wait_queue_hi);
+DECLARE_WAIT_QUEUE_HEAD(wait_queue_lo);
 
 static int Major;            /* Major number assigned to broadcast device driver */
 struct workqueue_struct *wq;	// Workqueue for async add
@@ -83,7 +95,7 @@ object_state objects[MINORS];
 struct element {
 	struct element *next;
 	char data[30];
-};
+} list_node;
 
 struct work_data {
     struct work_struct work;
@@ -106,6 +118,7 @@ static void work_handler(struct work_struct *work){
 
     //TODO temp
     memcpy(node->data, container_of((void*)data,struct work_data, work)->data, 30);
+    node->next = NULL;
 
     spin_lock(&list_spinlock_lo);
 
@@ -115,10 +128,14 @@ static void work_handler(struct work_struct *work){
     if(head_lo == NULL) {
     	head_lo = node;
     	tail_lo = node;
+
+    	data_aval_lo = 1;
     } else {
     	tail_lo->next = node;
     	tail_lo = node;
     }
+
+    wake_up(&wait_queue_lo);
     spin_unlock(&list_spinlock_lo);
 
     printk(KERN_INFO "Added element\n");
@@ -153,8 +170,10 @@ static int hlm_release(struct inode *inode, struct file *file) {
 static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t *off) {
 	char buffer[30];
 	int ret;
+	int minor = get_minor(filp);
 	int priority = objects[get_minor(filp)].priority;
 
+	printk("%s: minor %d enabled: %d block: %d priority: %d timeout: %lu\n",MODNAME, minor, objects[minor].enabled, objects[minor].block, objects[minor].priority, objects[minor].timeout);
 	printk("%s: write called with priority %d\n",MODNAME,priority);
 
 	if(len >= LINE_SIZE) return -1;
@@ -166,6 +185,8 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 		struct element *node = kmalloc(sizeof(struct element), GFP_KERNEL);
 
 		memcpy(node->data, buffer, 30);
+		node->next = NULL;
+
 		spin_lock(&list_spinlock_hi);
 
 		//Atomic?
@@ -175,10 +196,15 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 	    if(head_hi == NULL) {
 	    	head_hi = node;
 	    	tail_hi = node;
+
+	    	data_aval_hi = 1;
 	    } else {
 	    	tail_hi->next = node;
 	    	tail_hi = node;
 	    }
+
+	    wake_up(&wait_queue_hi);
+
 	    spin_unlock(&list_spinlock_hi);
 	} else {
 		struct work_data * data;
@@ -195,9 +221,13 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) {
 	int ret = 0;
 
+	int minor = get_minor(filp);
+	int priority = objects[minor].priority;
+	int timeout = objects[minor].timeout;
+	int block = objects[minor].block;
 
-	int priority = objects[get_minor(filp)].priority;
 	struct element **head;
+	struct element *tmp;
 
 	if(priority) {
 		head = &head_hi;
@@ -207,22 +237,52 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 
 	printk("%s: read called with priority %d\n",MODNAME,priority);
 
+	if(priority && block) {
+		atomic_inc((atomic_t*)&asleep_hi);
+		wait_event_interruptible_timeout(wait_queue_hi, data_aval_hi == 1, timeout);
+		if(data_aval_hi == 1){
+                printk("%s: thread %d exiting sleep for signal\n",MODNAME, current->pid);
+        }
+        atomic_dec((atomic_t*)&asleep_hi);
+	} else if(!priority && block) {
+		//Redundant condition but easier to read
+
+		atomic_inc((atomic_t*)&asleep_lo);
+		wait_event_interruptible_timeout(wait_queue_lo, data_aval_lo == 1, timeout);
+		if(data_aval_lo == 1){
+                printk("%s: thread %d exiting sleep for signal\n",MODNAME, current->pid);
+        }
+        atomic_dec((atomic_t*)&asleep_lo);
+	}
+
 	if(*head != NULL) {
 		if(priority) {
 			spin_lock(&list_spinlock_hi);
 		} else {
 			spin_lock(&list_spinlock_lo);
 		}
+
+		if(*head != NULL) {
 		printk(KERN_INFO "HLM output: %s\n", (*head)->data);
-		struct element *tmp = *head;
+		tmp = *head;
 		*head = (*head)->next;
 
-		//TODO atomic?
-		//atomic_dec((atomic_t*)&bytes);
-		if(priority) {
-			bytes_hi -= strlen(tmp->data);
-		} else {
-			bytes_lo -= strlen(tmp->data);
+		if(*head == NULL) {
+			if(priority) {
+				data_aval_hi = 0;
+			} else {
+				data_aval_lo = 0;
+			}
+
+			printk("%s: queue emptied hi: %d, lo: %d\n", MODNAME, data_aval_hi, data_aval_lo);
+		}
+			//TODO atomic?
+			//atomic_dec((atomic_t*)&bytes);
+			if(priority) {
+				bytes_hi -= strlen(tmp->data);
+			} else {
+				bytes_lo -= strlen(tmp->data);
+			}
 		}
 
 		if(priority) {
@@ -247,7 +307,7 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 static long hlm_ioctl(struct file *filp, unsigned int command, unsigned long param) {
   	int32_t value;
   	int minor = get_minor(filp);
-  	object_state obj = objects[minor];
+  	object_state *obj = objects + minor;
 
   	copy_from_user(&value ,(int32_t*) param, sizeof(value));
   	//object_state *the_object;
@@ -262,7 +322,7 @@ static long hlm_ioctl(struct file *filp, unsigned int command, unsigned long par
 		    	printk("%s: invalid priority %d\n",MODNAME,value);
 		    } else {
 		    	printk("%s: changed priority to %d\n",MODNAME,value);
-		    	obj.priority = value;
+		    	obj->priority = value;
 		    }
 		    break;
 
@@ -271,7 +331,7 @@ static long hlm_ioctl(struct file *filp, unsigned int command, unsigned long par
 		    	printk("%s: invalid value %d\n",MODNAME,value);
 		    } else {
 		    	
-				obj.enabled = value;
+				obj->enabled = value;
 				printk("%s: changing state to %d\n", MODNAME, value);
 		    }
 		    break;
@@ -281,7 +341,7 @@ static long hlm_ioctl(struct file *filp, unsigned int command, unsigned long par
 		 		printk("%s: invalid timeout value %d\n",MODNAME,value);
 		 	} else {
 		 		printk("%s: changing timeout to %d\n", MODNAME, value);
-		 		obj.timeout = value;
+		 		obj->timeout = value;
 		 	}
 		 	break;
 
@@ -290,7 +350,7 @@ static long hlm_ioctl(struct file *filp, unsigned int command, unsigned long par
 		 		printk("%s: invalid value %d\n",MODNAME,value);
 		 	} else {
 		 		printk("%s: changing blocking behaviour to %d\n", MODNAME, value);
-		 		obj.block = value;
+		 		obj->block = value;
 		 	}
 		 	break;
 
@@ -322,11 +382,12 @@ int init_module(void)
 
 		obj->enabled = 1;
 		obj->timeout = 1000;
-		obj->block = 0;
+		obj->block = 1;
 		obj->priority = 0;
 	}
 
 	Major = __register_chrdev(0, 0, 120, DEVICE_NAME, &fops);
+	major_number = Major;
 
 	if (Major < 0) {
 	  printk("Registering hlm device failed\n");
