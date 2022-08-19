@@ -1212,6 +1212,7 @@ deps_/home/daniele/SOA/SOA/hlm.o := \
   include/linux/kernel_read_file.h \
   include/linux/file.h \
   /home/daniele/SOA/SOA/lib/include/scth.h \
+  /home/daniele/SOA/SOA/lib/ioctl.h \
 
 /home/daniele/SOA/SOA/hlm.o: $(deps_/home/daniele/SOA/SOA/hlm.o)
 

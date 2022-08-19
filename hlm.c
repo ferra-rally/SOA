@@ -33,6 +33,7 @@ SETUP OBJECT STATE WITH HI-LO, timeout, block non-block
 #include <linux/workqueue.h>
 #include <linux/syscalls.h>
 #include "lib/include/scth.h"
+#include "lib/ioctl.h"
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Daniele Ferrarelli");
@@ -299,11 +300,6 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 	return 0;
 }
 
-#define CHG_PRT 0
-#define CHG_ENB_DIS 1
-#define CHG_TO 2
-#define CHG_BLK 3
-
 static long hlm_ioctl(struct file *filp, unsigned int command, unsigned long param) {
   	int32_t value;
   	int minor = get_minor(filp);
@@ -320,6 +316,7 @@ static long hlm_ioctl(struct file *filp, unsigned int command, unsigned long par
         case CHG_PRT:
 	        if(value != 0 && value != 1) {
 		    	printk("%s: invalid priority %d\n",MODNAME,value);
+		    	return -1;
 		    } else {
 		    	printk("%s: changed priority to %d\n",MODNAME,value);
 		    	obj->priority = value;
@@ -329,6 +326,7 @@ static long hlm_ioctl(struct file *filp, unsigned int command, unsigned long par
 		case CHG_ENB_DIS:
 			if(value != 0 && value != 1) {
 		    	printk("%s: invalid value %d\n",MODNAME,value);
+		    	return -1;
 		    } else {
 		    	
 				obj->enabled = value;
@@ -339,6 +337,7 @@ static long hlm_ioctl(struct file *filp, unsigned int command, unsigned long par
 		 case CHG_TO:
 		 	if(value <= 0) {
 		 		printk("%s: invalid timeout value %d\n",MODNAME,value);
+		 		return -1;
 		 	} else {
 		 		printk("%s: changing timeout to %d\n", MODNAME, value);
 		 		obj->timeout = value;
@@ -348,6 +347,7 @@ static long hlm_ioctl(struct file *filp, unsigned int command, unsigned long par
 		 case CHG_BLK:
 		 	if(value <= 0) {
 		 		printk("%s: invalid value %d\n",MODNAME,value);
+		 		return -1;
 		 	} else {
 		 		printk("%s: changing blocking behaviour to %d\n", MODNAME, value);
 		 		obj->block = value;
@@ -355,12 +355,12 @@ static long hlm_ioctl(struct file *filp, unsigned int command, unsigned long par
 		 	break;
 
         default:
-            printk("%s: invalid command\n",MODNAME);
+            printk("%s: invalid ioctl command\n",MODNAME);
+            return -1;
             break;
      }
 
   return 0;
-
 }
 
 static struct file_operations fops = {
