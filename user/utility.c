@@ -40,6 +40,10 @@ int main(int argc, char** argv){
 		cmd = CHG_PRT;
 	} else if(!strcmp("enable", command)) {
 		cmd = CHG_ENB_DIS;
+	} else if(!strcmp("timeout", command)) {
+		cmd = CHT_TO;
+	} else if(!strcmp("block", command)) {
+		cmd = CHG_BLK;
 	} else {
 		printf("Invalid command\n");
 		return 0;

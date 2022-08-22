@@ -1211,6 +1211,8 @@ deps_/home/daniele/SOA/SOA/hlm.o := \
     $(wildcard include/config/SECURITYFS) \
   include/linux/kernel_read_file.h \
   include/linux/file.h \
+  include/linux/proc_fs.h \
+    $(wildcard include/config/PROC_PID_ARCH_STATUS) \
   /home/daniele/SOA/SOA/lib/include/scth.h \
   /home/daniele/SOA/SOA/lib/ioctl.h \
 

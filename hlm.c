@@ -32,6 +32,9 @@ SETUP OBJECT STATE WITH HI-LO, timeout, block non-block
 #include <linux/version.h>
 #include <linux/workqueue.h>
 #include <linux/syscalls.h>
+#include <linux/kobject.h> 
+#include <linux/sysfs.h> 
+#include<linux/proc_fs.h>
 #include "lib/include/scth.h"
 #include "lib/ioctl.h"
 
@@ -88,6 +91,7 @@ typedef struct _object_state{
 	unsigned long timeout;
 	int block;
 	int enabled;
+	struct kobject *kobj;
 } object_state;
 
 
@@ -372,10 +376,94 @@ static struct file_operations fops = {
   .release = hlm_release
 };
 
-int init_module(void)
-{
-	int i;
+static ssize_t sysfs_show_statistics(struct kobject *kobj, struct kobj_attribute *attr, char *buf) {
+	unsigned long out;
 
+	if(!strcmp(attr->attr.name, "bytes_lo")) {
+		out = bytes_lo;
+	} else if(!strcmp(attr->attr.name, "bytes_hi")) {
+		out = bytes_hi;
+	} else if(!strcmp(attr->attr.name, "asleep_lo")) {
+		out = asleep_lo;
+	} else if(!strcmp(attr->attr.name, "asleep_hi")) {
+		out = asleep_hi;
+	}
+
+    return sprintf(buf, "%lu", out);
+}
+
+static ssize_t sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf) {
+	unsigned long out;
+	long num;
+	object_state *obj;
+
+	kstrtol(kobj->name, 10, &num);
+	obj = objects + num;
+	
+	if(!strcmp(attr->attr.name, "enabled")) {
+		out = obj->enabled;
+	} else if(!strcmp(attr->attr.name, "block")) {
+		out = obj->block;
+	} else if(!strcmp(attr->attr.name, "timeout")) {
+		out = obj->timeout;
+	} else if(!strcmp(attr->attr.name, "priority")) {
+		out = obj->priority;
+	}
+
+	return sprintf(buf, "%lu", out);
+}
+
+static ssize_t sysfs_store(struct kobject *kobj, struct kobj_attribute *attr,const char *buf, size_t count) {
+	unsigned long in;
+    long num;
+	object_state *obj;
+
+	kstrtol(kobj->name, 10, &num);
+	obj = objects + num;
+	
+	sscanf(buf,"%lu",&in);
+
+	if(!strcmp(attr->attr.name, "enabled")) {
+		obj->enabled = in;
+	} else if(!strcmp(attr->attr.name, "block")) {
+		obj->block = in;
+	} else if(!strcmp(attr->attr.name, "timeout")) {
+		obj->timeout = in;
+	} else if(!strcmp(attr->attr.name, "priority")) {
+		obj->priority = in;
+	}
+    return count;
+}
+
+struct kobject *hlm_kobject;
+struct kobject *devices_kobject;
+struct kobj_attribute bytes_lo_attr = __ATTR(bytes_lo, 0660, sysfs_show_statistics, NULL);
+struct kobj_attribute bytes_hi_attr = __ATTR(bytes_hi, 0660, sysfs_show_statistics, NULL);
+struct kobj_attribute asleep_lo_attr = __ATTR(asleep_hi, 0660, sysfs_show_statistics, NULL);
+struct kobj_attribute asleep_hi_attr = __ATTR(asleep_lo, 0660, sysfs_show_statistics, NULL);
+
+struct kobj_attribute katr_enabled = __ATTR(enabled, 0660, sysfs_show, sysfs_store);
+struct kobj_attribute katr_timeout = __ATTR(timeout, 0660, sysfs_show, sysfs_store);
+struct kobj_attribute katr_block = __ATTR(block, 0660, sysfs_show, sysfs_store);
+struct kobj_attribute katr_priority = __ATTR(priority, 0660, sysfs_show, sysfs_store);
+
+int init_module(void) {
+	int i;
+	char name[5];
+
+	// Create root kobject
+	hlm_kobject = kobject_create_and_add("hlm",NULL);
+ 
+	if(sysfs_create_file(hlm_kobject,&bytes_lo_attr.attr) ||
+		sysfs_create_file(hlm_kobject,&bytes_hi_attr.attr) ||
+		sysfs_create_file(hlm_kobject,&asleep_lo_attr.attr) ||
+		sysfs_create_file(hlm_kobject,&asleep_hi_attr.attr)) {
+
+		goto remove_sys;
+	}
+
+	devices_kobject = kobject_create_and_add("devices",hlm_kobject);
+	
 	//Enable all minors
 	for(i=0;i<MINORS;i++){
 		object_state *obj = objects + i;
@@ -384,6 +472,17 @@ int init_module(void)
 		obj->timeout = 1000;
 		obj->block = 1;
 		obj->priority = 0;
+
+		sprintf(name, "%d", i);
+
+		obj->kobj = kobject_create_and_add(name, devices_kobject);
+			if(sysfs_create_file(obj->kobj,&katr_enabled.attr) ||
+			sysfs_create_file(obj->kobj,&katr_timeout.attr) ||
+			sysfs_create_file(obj->kobj,&katr_priority.attr) ||
+			sysfs_create_file(obj->kobj,&katr_block.attr)) {
+			
+		    goto remove_sys;
+		}
 	}
 
 	Major = __register_chrdev(0, 0, 120, DEVICE_NAME, &fops);
@@ -402,12 +501,31 @@ int init_module(void)
 	}
 
     printk("%s: started\n",MODNAME);
-
 	return 0;
+
+remove_sys:
+	
+	kobject_put(hlm_kobject);
+	kobject_put(devices_kobject);
+    printk(KERN_INFO"Cannot create sysfs file......\n");
+    sysfs_remove_file(hlm_kobject, &bytes_lo_attr.attr);
+    sysfs_remove_file(hlm_kobject, &bytes_hi_attr.attr);
+    sysfs_remove_file(hlm_kobject, &asleep_lo_attr.attr);
+    sysfs_remove_file(hlm_kobject, &asleep_hi_attr.attr);
+    for(i=0;i<MINORS;i++){
+    	object_state *obj = objects + i;
+
+    	kobject_put(obj->kobj);
+    	sysfs_remove_file(obj->kobj,&katr_enabled.attr);
+		sysfs_remove_file(obj->kobj,&katr_timeout.attr);
+		sysfs_remove_file(obj->kobj,&katr_priority.attr);
+		sysfs_remove_file(obj->kobj,&katr_block.attr);
+    }
+
+    return -1;
 }
 
-void cleanup_module(void)
-{
+void cleanup_module(void) {
 
 	unregister_chrdev(Major, DEVICE_NAME);
 	printk(KERN_INFO "Hlm device unregistered, it was assigned major number %d\n", Major);
@@ -428,6 +546,23 @@ void cleanup_module(void)
 	}
 
     destroy_workqueue(wq);
-    printk(KERN_INFO "Work queue destroyied\n");
+
+    kobject_put(hlm_kobject);
+    kobject_put(devices_kobject);
+    sysfs_remove_file(hlm_kobject, &bytes_lo_attr.attr);
+    sysfs_remove_file(hlm_kobject, &bytes_hi_attr.attr);
+    sysfs_remove_file(hlm_kobject, &asleep_lo_attr.attr);
+    sysfs_remove_file(hlm_kobject, &asleep_hi_attr.attr);
+    for(int i=0;i<MINORS;i++){
+    	object_state *obj = objects + i;
+
+    	kobject_put(obj->kobj);
+    	sysfs_remove_file(obj->kobj,&katr_enabled.attr);
+		sysfs_remove_file(obj->kobj,&katr_timeout.attr);
+		sysfs_remove_file(obj->kobj,&katr_priority.attr);
+		sysfs_remove_file(obj->kobj,&katr_block.attr);
+    }
+
+    printk("%s: Work queue destroyed\n", MODNAME);
 }
 
