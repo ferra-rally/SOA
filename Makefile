@@ -1,5 +1,5 @@
 obj-m += the_hlm.o 
-the_hlm-objs += hlm.o lib/scth.o
+the_hlm-objs += hlm.o
 
 compile:
 	make -C /lib/modules/$(shell uname -r)/build M=$(PWD) modules 

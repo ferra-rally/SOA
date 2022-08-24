@@ -1213,7 +1213,6 @@ deps_/home/daniele/SOA/SOA/hlm.o := \
   include/linux/file.h \
   include/linux/proc_fs.h \
     $(wildcard include/config/PROC_PID_ARCH_STATUS) \
-  /home/daniele/SOA/SOA/lib/include/scth.h \
   /home/daniele/SOA/SOA/lib/ioctl.h \
 
 /home/daniele/SOA/SOA/hlm.o: $(deps_/home/daniele/SOA/SOA/hlm.o)

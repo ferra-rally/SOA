@@ -35,7 +35,6 @@ SETUP OBJECT STATE WITH HI-LO, timeout, block non-block
 #include <linux/kobject.h> 
 #include <linux/sysfs.h> 
 #include<linux/proc_fs.h>
-#include "lib/include/scth.h"
 #include "lib/ioctl.h"
 
 MODULE_LICENSE("GPL");
@@ -43,7 +42,7 @@ MODULE_AUTHOR("Daniele Ferrarelli");
 
 
 #define MODNAME "HLM"
-#define LINE_SIZE 30
+#define LINE_SIZE 128
 
 static int hlm_open(struct inode *, struct file *);
 static int hlm_release(struct inode *, struct file *);
@@ -99,12 +98,12 @@ object_state objects[MINORS];
 
 struct element {
 	struct element *next;
-	char data[30];
+	char data[LINE_SIZE];
 } list_node;
 
 struct work_data {
     struct work_struct work;
-    char data[30];
+    char data[LINE_SIZE];
 };
 
 struct element *head_hi = NULL;
@@ -122,7 +121,8 @@ static void work_handler(struct work_struct *work){
     struct element *node = kmalloc(sizeof(struct element), GFP_KERNEL);
 
     //TODO temp
-    memcpy(node->data, container_of((void*)data,struct work_data, work)->data, 30);
+    memcpy(node->data, container_of((void*)data,struct work_data, work)->data, LINE_SIZE);
+
     node->next = NULL;
 
     spin_lock(&list_spinlock_lo);
@@ -173,23 +173,20 @@ static int hlm_release(struct inode *inode, struct file *file) {
 
 
 static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t *off) {
-	char buffer[30];
+	char buffer[LINE_SIZE];
 	int ret;
-	int minor = get_minor(filp);
 	int priority = objects[get_minor(filp)].priority;
-
-	printk("%s: minor %d enabled: %d block: %d priority: %d timeout: %lu\n",MODNAME, minor, objects[minor].enabled, objects[minor].block, objects[minor].priority, objects[minor].timeout);
-	printk("%s: write called with priority %d\n",MODNAME,priority);
-
-	if(len >= LINE_SIZE) return -1;
 	
-	//ret = 
+	if(*off >= LINE_SIZE || len >= LINE_SIZE) {
+		return -ENOSPC;
+  	} 
+	
 	ret = copy_from_user(buffer,buff,len);
 
 	if(priority) {
 		struct element *node = kmalloc(sizeof(struct element), GFP_KERNEL);
 
-		memcpy(node->data, buffer, 30);
+		memcpy(node->data, buffer, len);
 		node->next = NULL;
 
 		spin_lock(&list_spinlock_hi);
@@ -214,7 +211,7 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 	} else {
 		struct work_data * data;
 		data = kmalloc(sizeof(struct work_data), GFP_KERNEL);
-		memcpy(data->data, buffer, 30);
+		memcpy(data->data, buffer, len);
 
 		INIT_WORK(&data->work, work_handler);
 		queue_work(wq, &data->work);
@@ -225,14 +222,17 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 
 static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) {
 	int ret = 0;
+	int lenght;
 
 	int minor = get_minor(filp);
 	int priority = objects[minor].priority;
-	int timeout = objects[minor].timeout;
+	unsigned long timeout = objects[minor].timeout;
 	int block = objects[minor].block;
 
 	struct element **head;
 	struct element *tmp;
+
+	//printk("%s: reading with timeout of %lu\n", MODNAME, timeout);
 
 	if(priority) {
 		head = &head_hi;
@@ -240,23 +240,15 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 		head = &head_lo;
 	}
 
-	printk("%s: read called with priority %d\n",MODNAME,priority);
-
 	if(priority && block) {
 		atomic_inc((atomic_t*)&asleep_hi);
 		wait_event_interruptible_timeout(wait_queue_hi, data_aval_hi == 1, timeout);
-		if(data_aval_hi == 1){
-                printk("%s: thread %d exiting sleep for signal\n",MODNAME, current->pid);
-        }
         atomic_dec((atomic_t*)&asleep_hi);
 	} else if(!priority && block) {
 		//Redundant condition but easier to read
 
 		atomic_inc((atomic_t*)&asleep_lo);
 		wait_event_interruptible_timeout(wait_queue_lo, data_aval_lo == 1, timeout);
-		if(data_aval_lo == 1){
-                printk("%s: thread %d exiting sleep for signal\n",MODNAME, current->pid);
-        }
         atomic_dec((atomic_t*)&asleep_lo);
 	}
 
@@ -268,7 +260,7 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 		}
 
 		if(*head != NULL) {
-		printk(KERN_INFO "HLM output: %s\n", (*head)->data);
+		//printk(KERN_INFO "HLM output: %s\n", (*head)->data);
 		tmp = *head;
 		*head = (*head)->next;
 
@@ -278,8 +270,6 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 			} else {
 				data_aval_lo = 0;
 			}
-
-			printk("%s: queue emptied hi: %d, lo: %d\n", MODNAME, data_aval_hi, data_aval_lo);
 		}
 			//TODO atomic?
 			//atomic_dec((atomic_t*)&bytes);
@@ -296,7 +286,9 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 			spin_unlock(&list_spinlock_lo);
 		}
 
-		ret = copy_to_user(buff,tmp->data,30);
+
+		lenght = strlen(tmp->data);
+		ret = copy_to_user(buff,tmp->data,lenght);
 		kfree(tmp);
 		return len - ret;
 	}
@@ -306,10 +298,14 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 
 static long hlm_ioctl(struct file *filp, unsigned int command, unsigned long param) {
   	int32_t value;
+  	int ret;
   	int minor = get_minor(filp);
   	object_state *obj = objects + minor;
 
-  	copy_from_user(&value ,(int32_t*) param, sizeof(value));
+  	ret = copy_from_user(&value ,(int32_t*) param, sizeof(value));
+  	if(ret != 0) {
+  		printk("%s: error in ioctl\n", MODNAME);
+  	}
   	//object_state *the_object;
 
   	//the_object = objects + minor;
@@ -349,7 +345,7 @@ static long hlm_ioctl(struct file *filp, unsigned int command, unsigned long par
 		 	break;
 
 		 case CHG_BLK:
-		 	if(value <= 0) {
+		 	if(value != 0 && value != 1) {
 		 		printk("%s: invalid value %d\n",MODNAME,value);
 		 		return -1;
 		 	} else {
@@ -397,7 +393,10 @@ static ssize_t sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, cha
 	long num;
 	object_state *obj;
 
-	kstrtol(kobj->name, 10, &num);
+	if(kstrtol(kobj->name, 10, &num)) {
+		return sprintf(buf, "error");
+	}
+
 	obj = objects + num;
 	
 	if(!strcmp(attr->attr.name, "enabled")) {
@@ -418,7 +417,10 @@ static ssize_t sysfs_store(struct kobject *kobj, struct kobj_attribute *attr,con
     long num;
 	object_state *obj;
 
-	kstrtol(kobj->name, 10, &num);
+	if(kstrtol(kobj->name, 10, &num)) {
+		return 0;
+	}
+
 	obj = objects + num;
 	
 	sscanf(buf,"%lu",&in);
@@ -450,6 +452,8 @@ struct kobj_attribute katr_priority = __ATTR(priority, 0660, sysfs_show, sysfs_s
 int init_module(void) {
 	int i;
 	char name[5];
+
+	printk("%s: Inserting module HLM\n", MODNAME);
 
 	// Create root kobject
 	hlm_kobject = kobject_create_and_add("hlm",NULL);
@@ -490,7 +494,7 @@ int init_module(void) {
 
 	if (Major < 0) {
 	  printk("Registering hlm device failed\n");
-	  return Major;
+	  goto remove_sys;
 	}
 
 	printk(KERN_INFO "Hlm device registered, it is assigned major number %d\n", Major);
@@ -498,16 +502,19 @@ int init_module(void) {
 	wq = create_singlethread_workqueue("hlm_wq");
 	if(wq == 0) {
 		printk(KERN_ERR "Work queue creation failed\n");
+		goto remove_dev;
 	}
 
     printk("%s: started\n",MODNAME);
 	return 0;
 
+remove_dev:
+	unregister_chrdev(Major, DEVICE_NAME);
 remove_sys:
 	
 	kobject_put(hlm_kobject);
 	kobject_put(devices_kobject);
-    printk(KERN_INFO"Cannot create sysfs file......\n");
+    printk(KERN_INFO"Cannot create sysfs files\n");
     sysfs_remove_file(hlm_kobject, &bytes_lo_attr.attr);
     sysfs_remove_file(hlm_kobject, &bytes_hi_attr.attr);
     sysfs_remove_file(hlm_kobject, &asleep_lo_attr.attr);

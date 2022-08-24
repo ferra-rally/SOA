@@ -41,7 +41,7 @@ int main(int argc, char** argv){
 	} else if(!strcmp("enable", command)) {
 		cmd = CHG_ENB_DIS;
 	} else if(!strcmp("timeout", command)) {
-		cmd = CHT_TO;
+		cmd = CHG_TO;
 	} else if(!strcmp("block", command)) {
 		cmd = CHG_BLK;
 	} else {
