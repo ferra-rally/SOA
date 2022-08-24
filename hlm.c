@@ -232,7 +232,7 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 	struct element **head;
 	struct element *tmp;
 
-	//printk("%s: reading with timeout of %lu\n", MODNAME, timeout);
+	printk("%s: reading with timeout of %lu\n", MODNAME, timeout);
 
 	if(priority) {
 		head = &head_hi;
@@ -334,7 +334,7 @@ static long hlm_ioctl(struct file *filp, unsigned int command, unsigned long par
 		    }
 		    break;
 
-		 case CHG_TO:
+		 case CHG_TIMEOUT:
 		 	if(value <= 0) {
 		 		printk("%s: invalid timeout value %d\n",MODNAME,value);
 		 		return -1;

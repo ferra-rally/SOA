@@ -38,12 +38,16 @@ int main(int argc, char** argv){
     val = atoi(value);
 	if(!strcmp("priority", command)) {
 		cmd = CHG_PRT;
+		printf("Changing priority: %d\n", val);
 	} else if(!strcmp("enable", command)) {
 		cmd = CHG_ENB_DIS;
+		printf("Changing enabled state: %d\n", val);
 	} else if(!strcmp("timeout", command)) {
-		cmd = CHG_TO;
+		cmd = CHG_TIMEOUT;
+		printf("Changing timeout: %d\n", val);
 	} else if(!strcmp("block", command)) {
 		cmd = CHG_BLK;
+		printf("Changing block state: %d\n", val);
 	} else {
 		printf("Invalid command\n");
 		return 0;
@@ -54,6 +58,8 @@ int main(int argc, char** argv){
 		printf("Error in ioctl with %d:%d\n", cmd, val);
 		return -1;
 	}
+
+	printf("Change done\n");
 
     return 0;
 }
