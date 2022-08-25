@@ -2,12 +2,14 @@
 This specification is related to a Linux device driver implementing low and high priority flows of data. 
 Through an open session to the device file a thread can read/write data segments. 
 The data delivery follows a First-in-First-out policy along each of the two different data flows (low and high priority). 
-r read operations, the read data disappear from the flow. Also, the high priority data flow must offer synchronous write operations while the low priority data flow must offer an asynchronous execution (based on delayed work) of write operations, while still keeping the interface able to synchronously notify the outcome. Read operations are all executed synchronously. The device driver should support 128 devices corresponding to the same amount of minor numbers.
+r read operations, the read data disappear from the flow. Also, the high priority data flow must offer synchronous write operations while the low priority data flow must offer an asynchronous execution (based on delayed work) of write operations, 
+while still keeping the interface able to synchronously notify the outcome. 
+Read operations are all executed synchronously. The device driver should support 128 devices corresponding to the same amount of minor numbers.
 
 The device driver should implement the support for the ioctl(..) service in order to manage the I/O session as follows:
 
     - setup of the priority level (high or low) for the operations V
-    - blocking vs non-blocking read and write operations (wait_queue)
+    - blocking vs non-blocking read and write operations (wait_queue) V
     - setup of a timeout regulating the awake of blocking operations (wait_interruptible with timer) 
 
 A a few Linux module parameters and functions should be implemented in order to enable or disable the device file, in terms of a specific minor number. 
@@ -83,7 +85,7 @@ DECLARE_WAIT_QUEUE_HEAD(wait_queue_lo);
 static int Major;            /* Major number assigned to broadcast device driver */
 struct workqueue_struct *wq;	// Workqueue for async add
 
-#define MINORS 120
+#define MINORS 128
 
 typedef struct _object_state{
 	int priority;
@@ -120,7 +122,6 @@ static void work_handler(struct work_struct *work){
 
     struct element *node = kmalloc(sizeof(struct element), GFP_KERNEL);
 
-    //TODO temp
     memcpy(node->data, container_of((void*)data,struct work_data, work)->data, LINE_SIZE);
 
     node->next = NULL;
@@ -232,8 +233,6 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 	struct element **head;
 	struct element *tmp;
 
-	printk("%s: reading with timeout of %lu\n", MODNAME, timeout);
-
 	if(priority) {
 		head = &head_hi;
 	} else {
@@ -252,6 +251,11 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
         atomic_dec((atomic_t*)&asleep_lo);
 	}
 
+	if(data_aval_lo == 0 || data_aval_hi == 0) {
+        printk("%s: %d exiting sleep for signal\n",MODNAME, current->pid);
+        return 0;
+    }
+
 	if(*head != NULL) {
 		if(priority) {
 			spin_lock(&list_spinlock_hi);
@@ -264,15 +268,14 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 		tmp = *head;
 		*head = (*head)->next;
 
-		if(*head == NULL) {
-			if(priority) {
-				data_aval_hi = 0;
-			} else {
-				data_aval_lo = 0;
+			if(*head == NULL) {
+				if(priority) {
+					data_aval_hi = 0;
+				} else {
+					data_aval_lo = 0;
+				}
 			}
-		}
-			//TODO atomic?
-			//atomic_dec((atomic_t*)&bytes);
+		
 			if(priority) {
 				bytes_hi -= strlen(tmp->data);
 			} else {
@@ -290,8 +293,9 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 		lenght = strlen(tmp->data);
 		ret = copy_to_user(buff,tmp->data,lenght);
 		kfree(tmp);
-		return len - ret;
+		return len;
 	}
+	
 	
 	return 0;
 }
