@@ -4,10 +4,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <pthread.h>
+#include <time.h>
 #include <sys/ioctl.h>
 #include "lib/ioctl.h"
 
-#define DATA "grrr\n"
+#define DATA "test string\n"
 #define SIZE strlen(DATA)
 #define THREADS 10
 
@@ -57,7 +58,7 @@ int main(int argc, char** argv){
         read(fd, buff, SIZE);
 
         if(strcmp(buff, DATA)) {
-        	printf("Test failed with data:%s recieved:%s\n", DATA, buff);
+        	printf("Test failed with data:%s:%s\n", DATA, buff);
         } else {
         	printf("Test 1 passed\n");
         }
@@ -69,12 +70,26 @@ int main(int argc, char** argv){
         read(fd, buff, SIZE);
 
         if(strcmp(buff, DATA)) {
-        	printf("Test failed with data:%s recieved:%s\n", DATA, buff);
+        	printf("Test failed with data:%s:%s\n", DATA, buff);
         } else {
         	printf("Test 2 passed\n");
         }
 
+        number = 0;
+        ioctl(fd,CHG_BLK,(int32_t*) &number);
+        //write(fd,DATA,SIZE);
+        char buff2[50];
+
+        read(fd, buff2, SIZE);
+
+        if(strlen(buff2) != 0) {
+                printf("Test failed with data:%s:%s\n", DATA, buff);
+        } else {
+                printf("Test 3 passed\n");
+        }
+
         // Return state back to normal
+        /*
         number = 0;
         ioctl(fd,CHG_PRT,(int32_t*) &number);
 
@@ -84,6 +99,7 @@ int main(int argc, char** argv){
         }
         
         pause();
+        */
         
         return 0;
 }

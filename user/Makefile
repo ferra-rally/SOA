@@ -1,7 +1,7 @@
 A = $(shell sudo cat /sys/module/the_hlm/parameters/major_number)
 
 all:
-	gcc user.c
+	gcc user.c -o user
 	gcc utility.c -o utility
 	gcc tests.c -lpthread  -o tests
 node:
