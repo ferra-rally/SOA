@@ -18,10 +18,7 @@ MODULE_AUTHOR("Daniele Ferrarelli");
 
 
 #define MODNAME "HLM"
-#define B_SIZE 5
-#define MAX_BLOCKS 3
-#define OBJECT_MAX_SIZE 50
-#define MAX_BYTES B_SIZE * MAX_BLOCKS
+#define MAX_BYTES 10
 
 static int hlm_open(struct inode *, struct file *);
 static int hlm_release(struct inode *, struct file *);
@@ -64,12 +61,14 @@ struct workqueue_struct *wq;	// Workqueue for async add
 
 struct element {
 	struct element *next;
-	char data[B_SIZE];
+	int r_pos;
+	int lenght;
+	char *data;
 } list_node;
 
 struct work_data {
     struct work_struct work;
-    char data[B_SIZE];
+    char *data;
 };
 
 typedef struct _object_state{
@@ -79,9 +78,8 @@ typedef struct _object_state{
 	int enabled;
 	struct kobject *kobj;
 	int valid;
-	//struct element *head[2];
-	//struct element *tail[2];
-	char *flow;
+	struct element *head[2];
+	struct element *tail[2];
 	struct mutex mux_lock;
 } object_state;
 
@@ -116,37 +114,66 @@ static int hlm_release(struct inode *inode, struct file *file) {
 
 static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t *off) {
 	int ret;
-	int priority;
+	int prt;
+	int rem;
+	struct element **head;
+	struct element **tail; 
+	struct element *node;
+
 	int minor = get_minor(filp);
 	object_state *obj = objects + minor;
 
-	printk("GRRRRRR\n");
-	priority = obj->priority;
+	prt = obj->priority;
+	head = &(obj->head[prt]);
+	tail = &(obj->tail[prt]);
 
-	printk("%s: priority %d write called\n", MODNAME, priority);
+	
+	printk("%s: priority %d write called\n", MODNAME, prt);
 
-	if(priority) {
+	if(prt) {
 		mutex_lock(&(obj->mux_lock));
 		
-		if(*off >= OBJECT_MAX_SIZE) {
+		if(*off >= MAX_BYTES) {
 			mutex_unlock(&(obj->mux_lock));
 			return -ENOSPC;
 		} 
 
-		if(*off > obj->valid) {
+		/*if(*off > obj->valid) {
 			mutex_unlock(&(obj->mux_lock));
 			return -ENOSR;
-		} 
+		} */
+		
+		if(obj->valid + len > MAX_BYTES) {
+			mutex_unlock(&(obj->mux_lock));
+			return -ENOSPC;
+		}
 
-		if((OBJECT_MAX_SIZE - *off) < len) len = OBJECT_MAX_SIZE - *off;
+		node = kmalloc(sizeof(struct element), GFP_KERNEL);
+		node->next = NULL;
+		node->data = kmalloc(len, GFP_KERNEL);
+		node->r_pos = 0;
+		node->lenght = len;
 
-		ret = copy_from_user(&(obj->flow[*off]),buff,len);
+		copy_from_user(node->data, buff, len);
+		printk("HLM: Written %ld bytes\n", strlen(node->data));
+		if(*tail == NULL) {
+			*head = node;
+			*tail = node;
 
-		*off += (len - ret);
-		obj->valid = *off;
+			printk("%s: added tail\n", MODNAME);
 
-		//ret = copy_from_user((tail_hi->data + w_pos),buff,rem);
+		} else {
+			(*tail)->next = node;
+			*tail = node;
+
+			printk("%s: added new node\n", MODNAME);
+		}
+
+		obj->valid += len;
+		
 		mutex_unlock(&(obj->mux_lock));
+
+		return len - ret;
 	} else {
 
 	}
@@ -156,30 +183,67 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 }
 
 static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) {
-	char buffer[B_SIZE];
 	int ret;
-	int priority;
+	int prt;
+	int to_read;
+	int x;
+	int lenght;
+	struct element **head;
+	struct element **tail; 
+	struct element *tmp;
 	object_state *obj;
 	int minor = get_minor(filp);
 
   	obj = objects + minor;
-	priority = obj->priority;
+	prt = obj->priority;
 
-	if(priority) {
+	head = &(obj->head[prt]);
+	tail = &(obj->tail[prt]);
+	to_read = len;
+
+	printk("HLM: req read of %ld\n", len);
+
+	if(prt) {
 		mutex_lock(&(obj->mux_lock));
-		if(*off > obj->valid) {
-			mutex_lock(&(obj->mux_lock));
-		 return 0;
-		} 
+		while(to_read > 0 && *head != NULL) {
+			printk("HLM: iteration\n");
+			tmp = *head;
+			lenght = strlen(tmp->data) - tmp->r_pos;
 
-		if((obj->valid - *off) < len) len = obj->valid - *off;
-		ret = copy_to_user(buff,&(obj->flow[*off]),len);
+			printk("HLM: grr reading off: %lld len:%d r_pos:%d x:%d to_read: %d %s\n", *off, lenght, tmp->r_pos ,x, to_read, tmp->data + tmp->r_pos);
+			if(to_read >= lenght) {
+				printk("HLM: complete read\n");
+				x = lenght;
 
-		*off += (len - ret);
+				*head = tmp->next;
+
+				ret = copy_to_user(buff + (len - to_read), tmp->data + tmp->r_pos, x);
+				kfree(tmp->data);
+				kfree(tmp);
+			} else {
+				//Partial read
+				printk("HLM: partial read\n");
+				x = to_read;
+				ret = copy_to_user(buff + (len - to_read), tmp->data + tmp->r_pos , x);
+				tmp->r_pos += x;
+			}
+			
+			to_read -= x;
+			obj->valid -= x;
+
+			if(*head == NULL) {
+				printk("HLM: all data consumed\n");
+				*tail = NULL;
+			}
+		}
+		
+
+		printk("HLM: done reading\n");
 		mutex_unlock(&(obj->mux_lock));
 
-		return len - ret;
+		return len - to_read;
 	}
+
 	return 0;
 }
 
@@ -354,13 +418,11 @@ int init_module(void) {
 		obj->block = 1;
 		obj->priority = 1; //TODO move to 0
 		obj->valid = 0;
-		/*
+		
 		obj->head[0] = NULL;
 		obj->head[1] = NULL;
 		obj->tail[0] = NULL;
 		obj->tail[1] = NULL;
-		*/
-		obj->flow = kmalloc(OBJECT_MAX_SIZE, GFP_KERNEL);
 		mutex_init(&(obj->mux_lock));
 
 		sprintf(name, "%d", i);

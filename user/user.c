@@ -6,7 +6,7 @@
 #include <pthread.h>
 #include <sys/ioctl.h>
 
-#define DATA "grrrrrr\n"
+#define DATA "graaaa"
 #define SIZE strlen(DATA)
 
 #define CHG_PRT 0
@@ -22,13 +22,13 @@ int main(int argc, char** argv){
                 return -1;
         }
 
-        number = 0;
+        number = 1;
         ioctl(fd,CHG_PRT,(int32_t*) &number);
         printf("Writing %d bytes\n", strlen(DATA));
-        int ret = write(fd,DATA,SIZE);
+        int ret = write(fd, DATA, SIZE);
         printf("write ret: %d\n", ret);
 
-        read(fd, buff, 20);
+        read(fd, buff, 3);
         printf("Reading %d bytes: ---\n%s\n---\n", strlen(buff), buff);
 
         return 0;
