@@ -7,7 +7,7 @@
 #include <sys/ioctl.h>
 #include "lib/ioctl.h"
 
-#define DATA "graaaaa"
+#define DATA "abcdef"
 #define SIZE strlen(DATA)
 
 int main(int argc, char** argv){
@@ -15,6 +15,7 @@ int main(int argc, char** argv){
         int number;
         int ret;
         char buff[20];
+        char buff2[20];
 
         fd = open("./test", O_RDWR);
         if(fd == -1) {
@@ -33,10 +34,10 @@ int main(int argc, char** argv){
         printf("write ret: %d\n", ret);
         ret = write(fd, DATA, SIZE);
         printf("write ret: %d\n", ret);
-        pread(fd, buff, 5, 2);
+        pread(fd, buff, 5, 3);
         printf("Reading 1 %d bytes: ---\n%s\n---\n", strlen(buff), buff);
-        read(fd, buff, 3);
-        printf("Reading 2 %d bytes: ---\n%s\n---\n", strlen(buff), buff);
+        read(fd, buff2, 20);
+        printf("Reading 2 %d bytes: ---\n%s\n---\n", strlen(buff2), buff2);
 
         /*
         printf("Writing %d bytes\n", strlen(DATA));

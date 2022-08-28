@@ -212,7 +212,6 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 	int lenght;
 	int block;
 	int timeout;
-	int of;
 	struct element **head;
 	struct element **tail; 
 	struct element *tmp;
@@ -256,25 +255,29 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 		mutex_lock(&(obj->mux_lock[prt]));
 	}
 
-	//(*head)->r_pos += *off;
-	of = *off;
+	//of = *off;
+	obj->r_pos += *off;
 
 	while(to_read > 0 && *head != NULL) {
 		tmp = *head;
+
+		//Available data in the block
 		lenght = strlen(tmp->data) - obj->r_pos;
-		printk("HLM: grr reading off: %lld len:%d r_pos:%d x:%d to_read: %d %s\n", *off, lenght, tmp->r_pos ,x, to_read, tmp->data + obj->r_pos + of);
-		
-		if(of > lenght) {
+		printk("HLM: grr reading off: %lld len:%d r_pos:%d x:%d to_read: %d %s\n", *off, lenght, obj->r_pos ,x, to_read, tmp->data + obj->r_pos);
+		/*
+		if(obj->r_pos > lenght + obj->r_pos) {
+			printk("HLM: skipped block\n");
 			*head = tmp->next;
-			of -= lenght;
+			obj->r_pos -= lenght;
 			kfree(tmp->data);
 			kfree(tmp);
-		} else if(to_read >= lenght) {
+		} else */if(to_read >= lenght) {
+			printk("HLM: block read going to the next\n");
 			x = lenght;
 
 			*head = tmp->next;
 
-			ret = copy_to_user(buff + (len - to_read), tmp->data + obj->r_pos + of, x);
+			ret = copy_to_user(buff + (len - to_read), tmp->data + obj->r_pos, x);
 			/*if(ret != x) {
 				//Not all bytes were delivered
 				printk("HLM: not all bytes delivered\n");
@@ -285,14 +288,15 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 		} else {
 			//Partial read
 			x = to_read;
-			ret = copy_to_user(buff + (len - to_read), tmp->data + obj->r_pos + of , x);
+			ret = copy_to_user(buff + (len - to_read), tmp->data + obj->r_pos, x);
 			/*
 			if(ret != x) {
 				//Not all bytes were delivered
 				printk("HLM: not all bytes delivered\n");
 			}*/
 
-			obj->r_pos += x + of;
+			obj->r_pos += x;
+			printk("HLM: partial reading remaining data %s\n", tmp->data + obj->r_pos);
 		}
 		
 		to_read -= x;
@@ -482,6 +486,7 @@ int init_module(void) {
 		obj->block = 1;
 		obj->priority = 1; //TODO move to 0
 		obj->valid = 0;
+		obj->r_pos = 0;
 		
 		obj->head[0] = NULL;
 		obj->head[1] = NULL;
