@@ -8,7 +8,7 @@
 #include <sys/ioctl.h>
 #include "lib/ioctl.h"
 
-#define DATA "test string\n"
+#define DATA "teststring\n"
 #define SIZE strlen(DATA)
 #define THREADS 10
 
@@ -53,7 +53,8 @@ int main(int argc, char** argv){
 
         number = 0;
         ioctl(fd,CHG_PRT,(int32_t*) &number);
-        write(fd,DATA,SIZE);
+
+        write(fd, DATA, SIZE);
 
         read(fd, buff, SIZE);
 

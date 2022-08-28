@@ -5,15 +5,15 @@
 #include <string.h>
 #include <pthread.h>
 #include <sys/ioctl.h>
+#include "lib/ioctl.h"
 
-#define DATA "graaaa"
+#define DATA "graaaaa"
 #define SIZE strlen(DATA)
-
-#define CHG_PRT 0
 
 int main(int argc, char** argv){
         int fd;
         int number;
+        int ret;
         char buff[20];
 
         fd = open("./test", O_RDWR);
@@ -24,12 +24,35 @@ int main(int argc, char** argv){
 
         number = 1;
         ioctl(fd,CHG_PRT,(int32_t*) &number);
-        printf("Writing %d bytes\n", strlen(DATA));
-        int ret = write(fd, DATA, SIZE);
-        printf("write ret: %d\n", ret);
 
+        number = 0;
+        ioctl(fd,CHG_BLK,(int32_t*) &number);
+
+        printf("Writing %d bytes\n", 2 * strlen(DATA));
+        ret = write(fd, DATA, SIZE);
+        printf("write ret: %d\n", ret);
+        ret = write(fd, DATA, SIZE);
+        printf("write ret: %d\n", ret);
+        pread(fd, buff, 5, 2);
+        printf("Reading 1 %d bytes: ---\n%s\n---\n", strlen(buff), buff);
+        read(fd, buff, 3);
+        printf("Reading 2 %d bytes: ---\n%s\n---\n", strlen(buff), buff);
+
+        /*
+        printf("Writing %d bytes\n", strlen(DATA));
+        ret = write(fd, DATA, SIZE);
+        printf("write ret: %d\n", ret);
         read(fd, buff, 3);
         printf("Reading %d bytes: ---\n%s\n---\n", strlen(buff), buff);
 
+        read(fd, buff, 20);
+        printf("Reading %d bytes: ---\n%s\n---\n", strlen(buff), buff);
+
+        ret = write(fd, DATA, SIZE);
+        printf("write ret: %d\n", ret);
+        lseek(fd, 2, SEEK_SET);
+        read(fd, buff, 20);
+        printf("Reading %d bytes: ---\n%s\n---\n", strlen(buff), buff);
+        */
         return 0;
 }
