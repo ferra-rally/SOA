@@ -15,7 +15,7 @@ int main(int argc, char** argv){
         int number;
         int ret;
         char buff[20];
-        char buff2[20];
+        char buff2[5];
 
         fd = open("./test", O_RDWR);
         if(fd == -1) {

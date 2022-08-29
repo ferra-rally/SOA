@@ -25,20 +25,8 @@ static int hlm_release(struct inode *, struct file *);
 static ssize_t hlm_write(struct file *, const char *, size_t, loff_t *);
 static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off);
 
-unsigned long bytes_hi __attribute__((aligned(8)));
-module_param(bytes_hi,ulong,0660);
-
-unsigned long bytes_lo __attribute__((aligned(8)));
-module_param(bytes_lo,ulong,0660);
-
 int major_number;
 module_param(major_number,int,0660);
-
-int asleep_hi __attribute__((aligned(8)));
-module_param(asleep_hi,int,0660);
-
-int asleep_lo __attribute__((aligned(8)));
-module_param(asleep_lo,int,0660);
 
 #define DEVICE_NAME "hlm"  /* Device file name in /dev/ - not mandatory  */
 
@@ -57,28 +45,29 @@ struct workqueue_struct *wq;	// Workqueue for async add
 
 struct element {
 	struct element *next;
-	int r_pos;
 	int lenght;
 	char *data;
 } list_node;
 
 struct work_data {
     struct work_struct work;
+    int minor;
     char *data;
 };
 
 typedef struct _object_state{
 	int priority;
+	int asleep[2];
 	unsigned long timeout;
 	int block;
-	int r_pos;
+	int r_pos[2];
 	int enabled;
 	struct kobject *kobj;
-	int valid;
+	unsigned long valid[2];
+	unsigned long pending[2];
 	struct element *head[2];
 	struct element *tail[2];
-	//struct mutex mux_lock_hi;
-	//struct mutex mux_lock_lo;
+	struct workqueue_struct *work_queue;
 	struct mutex mux_lock[2];
 	wait_queue_head_t wq_w[2];
 	wait_queue_head_t wq_r[2];
@@ -86,7 +75,52 @@ typedef struct _object_state{
 
 object_state objects[MINORS];
 
-static void work_handler(struct work_struct *work){
+/*
+int add_block(object_state *obj, char *buff, int len, int prt) {
+
+}
+*/
+
+static void work_handler(struct work_struct *work_elem){
+	struct element **head;
+	struct element **tail; 
+	struct element *node;
+	int timeout;
+	int len;
+	struct work_data *wd = container_of((void*)work_elem,struct work_data, work);
+	int minor = wd->minor;
+	
+	object_state *obj = objects + minor;
+	timeout = obj->timeout;
+	len = strlen(wd->data);
+
+	printk("HLM: delayed work minor-%d\n", wd->minor);
+	mutex_lock(&(obj->mux_lock[0]));
+
+	head = &(obj->head[0]);
+	tail = &(obj->tail[0]);
+
+	node = kmalloc(sizeof(struct element), GFP_KERNEL);
+	node->next = NULL;
+	node->data = kmalloc(len, GFP_KERNEL);
+
+	memcpy(node->data, wd->data, len);
+	if(*tail == NULL) {
+		*head = node;
+		*tail = node;
+		obj->r_pos[0] = 0;
+
+	} else {
+		(*tail)->next = node;
+		*tail = node;
+	}
+
+	obj->valid[0] += len;
+	wake_up(&(obj->wq_r[0]));
+	mutex_unlock(&(obj->mux_lock[0]));
+
+	kfree(wd->data);
+	kfree(work_elem);
     return;
 }
 
@@ -115,7 +149,6 @@ static int hlm_release(struct inode *inode, struct file *file) {
 static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t *off) {
 	int ret;
 	int prt;
-	int rem;
 	int timeout;
 	int block;
 	struct element **head;
@@ -131,7 +164,6 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 	timeout = obj->timeout;
 	block = obj->block;
 
-	
 	printk("%s: priority %d write called\n", MODNAME, prt);
 
 	if(prt) {
@@ -142,29 +174,16 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 			return -ENOSPC;
 		} 
 
-		/*if(*off > obj->valid) {
-			mutex_unlock(&(obj->mux_lock_hi));
-			return -ENOSR;
-		} */
-		
-		/*
-		if(obj->valid + len + *off > MAX_BYTES) {
-			mutex_unlock(&(obj->mux_lock_hi));
-			return -ENOSPC;
-		}
-		*/
-
-		
-		if(obj->valid + len > MAX_BYTES) {
+		if(obj->valid[prt] + len > MAX_BYTES) {
 			if(block) {
 				mutex_unlock(&(obj->mux_lock[prt]));
 
-				atomic_inc((atomic_t*)&asleep_hi);
-				wait_event_interruptible_timeout(obj->wq_w[prt], obj->valid + len <= MAX_BYTES, timeout);
-				atomic_dec((atomic_t*)&asleep_hi);
+				atomic_inc((atomic_t*)&(obj->asleep[prt]));
+				wait_event_interruptible_timeout(obj->wq_w[prt], obj->valid[prt] + len <= MAX_BYTES, timeout);
+				atomic_dec((atomic_t*)&(obj->asleep[prt]));
 
 				mutex_lock(&(obj->mux_lock[prt]));
-				if(obj->valid + len > MAX_BYTES) {
+				if(obj->valid[prt] + len > MAX_BYTES) {
 					return -ENOSPC;
 				}
 			} else {
@@ -173,31 +192,45 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 			}
 		}
 
+		//ret = add_block(obj, buff, len, 1);
+		
 		node = kmalloc(sizeof(struct element), GFP_KERNEL);
 		node->next = NULL;
 		node->data = kmalloc(len, GFP_KERNEL);
-		node->r_pos = 0;
-		node->lenght = len;
 
 		ret = copy_from_user(node->data, buff, len);
 		if(*tail == NULL) {
 			*head = node;
 			*tail = node;
-			obj->r_pos = 0;
+			obj->r_pos[prt] = 0;
 
 		} else {
 			(*tail)->next = node;
 			*tail = node;
 		}
 
-		obj->valid += len;
-		wake_up(&(obj->wq_r[prt]));
+		obj->valid[prt] += len;
 		
+		wake_up(&(obj->wq_r[prt]));
 		mutex_unlock(&(obj->mux_lock[prt]));
 
 		return len - ret;
 	} else {
+		struct work_data * data;
+		data = kmalloc(sizeof(struct work_data), GFP_KERNEL);
+		data->data = kmalloc(len, GFP_KERNEL);
+		ret = copy_from_user(data->data, buff, len);
+		if(ret != 0) {
+			printk("HLM: failed to write in prt 0\n");
+			return -1;
+		}
 
+		data->minor = minor;
+
+		INIT_WORK(&data->work, work_handler);
+		queue_work(wq, &data->work);
+
+		return len - ret;
 	}
 
 	return 0;
@@ -231,22 +264,16 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 	printk("HLM: req read of %ld with %d and timeout %d\n", len, block, timeout);
 
 	mutex_lock(&(obj->mux_lock[prt]));
-
-	//atomic_inc((atomic_t*)&asleep_hi);
-	//wait_event_interruptible_timeout(wq_r[prt], data_aval_hi == 1, timeout);
-    //atomic_dec((atomic_t*)&asleep_hi);
-
-    if(to_read + *off > obj->valid && block) {
-		printk("HLM: Not enough data\n");
+    if(to_read + *off > obj->valid[prt] && block) {
 
 		mutex_unlock(&(obj->mux_lock[prt]));
 
-		atomic_inc((atomic_t*)&asleep_hi);
-		wait_event_interruptible_timeout(obj->wq_r[prt], to_read + *off <= obj->valid, timeout);
-		atomic_dec((atomic_t*)&asleep_hi);
+		atomic_inc((atomic_t*)&(obj->asleep[prt]));
+		wait_event_interruptible_timeout(obj->wq_r[prt], to_read + *off <= obj->valid[prt], timeout);
+		atomic_dec((atomic_t*)&(obj->asleep[prt]));
 
 		
-		if(to_read + *off > obj->valid) {
+		if(to_read + *off > obj->valid[prt]) {
 			printk("HLM: waken up from signal, not enough data\n");
 			//to_read = obj->valid;
 			//return -1;
@@ -255,52 +282,46 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 		mutex_lock(&(obj->mux_lock[prt]));
 	}
 
-	//of = *off;
-	obj->r_pos += *off;
+	obj->r_pos[prt] += *off;
 
 	while(to_read > 0 && *head != NULL) {
 		tmp = *head;
 
 		//Available data in the block
-		lenght = strlen(tmp->data) - obj->r_pos;
-		printk("HLM: grr reading off: %lld len:%d r_pos:%d x:%d to_read: %d %s\n", *off, lenght, obj->r_pos ,x, to_read, tmp->data + obj->r_pos);
-		/*
-		if(obj->r_pos > lenght + obj->r_pos) {
-			printk("HLM: skipped block\n");
-			*head = tmp->next;
-			obj->r_pos -= lenght;
-			kfree(tmp->data);
-			kfree(tmp);
-		} else */if(to_read >= lenght) {
-			printk("HLM: block read going to the next\n");
+		lenght = strlen(tmp->data) - obj->r_pos[prt];
+		printk("HLM: grr reading off: %lld len:%d r_pos:%d x:%d to_read: %d %s\n", *off, lenght, obj->r_pos[prt] ,x, to_read, tmp->data + obj->r_pos[prt]);
+		if(to_read >= lenght) {
 			x = lenght;
 
 			*head = tmp->next;
 
-			ret = copy_to_user(buff + (len - to_read), tmp->data + obj->r_pos, x);
-			/*if(ret != x) {
-				//Not all bytes were delivered
-				printk("HLM: not all bytes delivered\n");
-			}*/
-			kfree(tmp->data);
-			kfree(tmp);
-			obj->r_pos = 0;
+			ret = copy_to_user(buff + (len - to_read), tmp->data + obj->r_pos[prt], x);
+			if(ret != 0) {
+				//Not all bytes were delivered reset reading position
+				obj->r_pos[prt] = lenght - ret;
+				break;
+			} else {
+				//All bytes were read, block can be freed
+				kfree(tmp->data);
+				kfree(tmp);
+				obj->r_pos[prt] = 0;
+			}
 		} else {
 			//Partial read
 			x = to_read;
-			ret = copy_to_user(buff + (len - to_read), tmp->data + obj->r_pos, x);
-			/*
-			if(ret != x) {
+			ret = copy_to_user(buff + (len - to_read), tmp->data + obj->r_pos[prt], x);
+			if(ret != 0) {
 				//Not all bytes were delivered
-				printk("HLM: not all bytes delivered\n");
-			}*/
+				obj->r_pos[prt] -= ret;
+				break;
+			}
 
-			obj->r_pos += x;
-			printk("HLM: partial reading remaining data %s\n", tmp->data + obj->r_pos);
+			obj->r_pos[prt] += x;
+			printk("HLM: partial reading remaining data %s\n", tmp->data + obj->r_pos[prt]);
 		}
 		
 		to_read -= x;
-		obj->valid -= x;
+		obj->valid[prt] -= x;
 	}
 
 	// If queue is emptied reset tail
@@ -390,22 +411,6 @@ static struct file_operations fops = {
   .release = hlm_release
 };
 
-static ssize_t sysfs_show_statistics(struct kobject *kobj, struct kobj_attribute *attr, char *buf) {
-	unsigned long out;
-
-	if(!strcmp(attr->attr.name, "bytes_lo")) {
-		out = bytes_lo;
-	} else if(!strcmp(attr->attr.name, "bytes_hi")) {
-		out = bytes_hi;
-	} else if(!strcmp(attr->attr.name, "asleep_lo")) {
-		out = asleep_lo;
-	} else if(!strcmp(attr->attr.name, "asleep_hi")) {
-		out = asleep_hi;
-	}
-
-    return sprintf(buf, "%lu", out);
-}
-
 static ssize_t sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, char *buf) {
 	unsigned long out;
 	long num;
@@ -425,6 +430,14 @@ static ssize_t sysfs_show(struct kobject *kobj, struct kobj_attribute *attr, cha
 		out = obj->timeout;
 	} else if(!strcmp(attr->attr.name, "priority")) {
 		out = obj->priority;
+	} else if(!strcmp(attr->attr.name, "asleep_hi")) {
+		out = obj->asleep[1];
+	} else if(!strcmp(attr->attr.name, "asleep_lo")) {
+		out = obj->asleep[0];
+	} else if(!strcmp(attr->attr.name, "bytes_hi")) {
+		out = obj->valid[1];
+	} else if(!strcmp(attr->attr.name, "bytes_lo")) {
+		out = obj->valid[0];
 	}
 
 	return sprintf(buf, "%lu", out);
@@ -456,11 +469,10 @@ static ssize_t sysfs_store(struct kobject *kobj, struct kobj_attribute *attr,con
 }
 
 struct kobject *hlm_kobject;
-struct kobject *devices_kobject;
-struct kobj_attribute bytes_lo_attr = __ATTR(bytes_lo, 0660, sysfs_show_statistics, NULL);
-struct kobj_attribute bytes_hi_attr = __ATTR(bytes_hi, 0660, sysfs_show_statistics, NULL);
-struct kobj_attribute asleep_lo_attr = __ATTR(asleep_hi, 0660, sysfs_show_statistics, NULL);
-struct kobj_attribute asleep_hi_attr = __ATTR(asleep_lo, 0660, sysfs_show_statistics, NULL);
+struct kobj_attribute bytes_lo_attr = __ATTR(bytes_lo, 0660, sysfs_show, NULL);
+struct kobj_attribute bytes_hi_attr = __ATTR(bytes_hi, 0660, sysfs_show, NULL);
+struct kobj_attribute asleep_lo_attr = __ATTR(asleep_hi, 0660, sysfs_show, NULL);
+struct kobj_attribute asleep_hi_attr = __ATTR(asleep_lo, 0660, sysfs_show, NULL);
 
 struct kobj_attribute katr_enabled = __ATTR(enabled, 0660, sysfs_show, sysfs_store);
 struct kobj_attribute katr_timeout = __ATTR(timeout, 0660, sysfs_show, sysfs_store);
@@ -469,47 +481,59 @@ struct kobj_attribute katr_priority = __ATTR(priority, 0660, sysfs_show, sysfs_s
 
 int init_module(void) {
 	int i;
-	struct element *node;
 	char name[5];
 
 	printk("%s: Inserting module HLM\n", MODNAME);
 
 	hlm_kobject = kobject_create_and_add("hlm",NULL);
-	devices_kobject = kobject_create_and_add("devices",hlm_kobject);
 	
 	//Enable all minors
 	for(i=0;i<MINORS;i++) {
 		object_state *obj = objects + i;
 
+		sprintf(name, "%d", i);
+
+		for(int j = 0; j < 2; j++) {
+			obj->valid[j] = 0;
+			obj->r_pos[j] = 0;
+			obj->pending[j] = 0;
+			
+			obj->head[j] = NULL;
+			obj->tail[j] = NULL;
+
+			mutex_init(&(obj->mux_lock[j]));
+
+			init_waitqueue_head(&(obj->wq_w[j]));
+			init_waitqueue_head(&(obj->wq_r[j]));
+		}
+
 		obj->enabled = 1;
 		obj->timeout = 1000;
 		obj->block = 1;
 		obj->priority = 1; //TODO move to 0
-		obj->valid = 0;
-		obj->r_pos = 0;
 		
-		obj->head[0] = NULL;
-		obj->head[1] = NULL;
-		obj->tail[0] = NULL;
-		obj->tail[1] = NULL;
 		//mutex_init(&(obj->mux_lock_hi));
 		//mutex_init(&(obj->mux_lock_lo));
-		mutex_init(&(obj->mux_lock[0]));
-		mutex_init(&(obj->mux_lock[1]));
 
-		init_waitqueue_head(&(obj->wq_w[0]));
-		init_waitqueue_head(&(obj->wq_w[1]));
-		init_waitqueue_head(&(obj->wq_r[0]));
-		init_waitqueue_head(&(obj->wq_r[1]));
+		obj->work_queue = create_singlethread_workqueue(name);
+		if(obj->work_queue == 0) {
+			printk(KERN_ERR "Work queue creation failed\n");
+			goto remove_dev;
+		}
 
 		sprintf(name, "%d", i);
 
-		obj->kobj = kobject_create_and_add(name, devices_kobject);
-			if(sysfs_create_file(obj->kobj,&katr_enabled.attr) ||
+		obj->kobj = kobject_create_and_add(name, hlm_kobject);
+		if(sysfs_create_file(obj->kobj,&katr_enabled.attr) ||
 			sysfs_create_file(obj->kobj,&katr_timeout.attr) ||
 			sysfs_create_file(obj->kobj,&katr_priority.attr) ||
-			sysfs_create_file(obj->kobj,&katr_block.attr)) {
+			sysfs_create_file(obj->kobj,&katr_block.attr) ||
+			sysfs_create_file(obj->kobj,&bytes_lo_attr.attr) ||
+			sysfs_create_file(obj->kobj,&bytes_hi_attr.attr) ||
+			sysfs_create_file(obj->kobj,&asleep_hi_attr.attr) ||
+			sysfs_create_file(obj->kobj,&asleep_lo_attr.attr)) {
 			
+			printk("%s: error during creation of sysfs files\n", MODNAME);
 		    goto remove_sys;
 		}
 	}
@@ -538,7 +562,6 @@ remove_dev:
 remove_sys:
 	
 	kobject_put(hlm_kobject);
-	kobject_put(devices_kobject);
     printk(KERN_INFO"Cannot create sysfs files\n");
     sysfs_remove_file(hlm_kobject, &bytes_lo_attr.attr);
     sysfs_remove_file(hlm_kobject, &bytes_hi_attr.attr);
@@ -558,31 +581,29 @@ remove_sys:
 }
 
 void cleanup_module(void) {
-
+	struct element *node;
 	unregister_chrdev(Major, DEVICE_NAME);
 	printk(KERN_INFO "Hlm device unregistered, it was assigned major number %d\n", Major);
 
-	flush_workqueue(wq);
+	for(int i = 0; i < MINORS; i++) {
+		object_state *obj = objects + i;
+		//flush_workqueue(wq);
 
-	/*
-	// Empty queue
-	while(head_hi != NULL) {
-		struct element *tmp = head_hi;
-		head_hi = head_hi->next;
-		kfree(tmp);
+		// Empty queue
+		for(int j = 0; j < 2; j++) {
+			node = obj->head[j];
+			while(node != NULL) {
+				struct element *tmp = node;
+				node = node->next;
+				kfree(tmp->data);
+				kfree(tmp);
+			}
+		}
+
+		//destroy_workqueue(wq);
 	}
-
-	while(head_lo != NULL) {
-		struct element *tmp = head_lo;
-		head_lo = head_lo->next;
-		kfree(tmp);
-	}
-	*/
-
-    destroy_workqueue(wq);
 
     kobject_put(hlm_kobject);
-    kobject_put(devices_kobject);
     sysfs_remove_file(hlm_kobject, &bytes_lo_attr.attr);
     sysfs_remove_file(hlm_kobject, &bytes_hi_attr.attr);
     sysfs_remove_file(hlm_kobject, &asleep_lo_attr.attr);
