@@ -15,7 +15,7 @@ int main(int argc, char** argv){
         int number;
         int ret;
         char buff[20];
-        char buff2[5];
+        char buff2[20];
 
         fd = open("./test", O_RDWR);
         if(fd == -1) {
@@ -34,10 +34,11 @@ int main(int argc, char** argv){
         printf("write ret: %d\n", ret);
         ret = write(fd, DATA, SIZE);
         printf("write ret: %d\n", ret);
-        pread(fd, buff, 5, 3);
+
+        pread(fd, buff, 5, 0);
         printf("Reading 1 %d bytes: ---\n%s\n---\n", strlen(buff), buff);
-        read(fd, buff2, 20);
-        printf("Reading 2 %d bytes: ---\n%s\n---\n", strlen(buff2), buff2);
+        ret = read(fd, buff2, 20);
+        printf("Reading 2 %d bytes: ---%s---\n", ret, buff2);
 
         /*
         printf("Writing %d bytes\n", strlen(DATA));

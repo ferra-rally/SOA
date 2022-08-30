@@ -19,6 +19,7 @@ MODULE_AUTHOR("Daniele Ferrarelli");
 
 #define MODNAME "HLM"
 #define MAX_BYTES 50
+#define BLOCK_MAX_SIZE 10
 
 static int hlm_open(struct inode *, struct file *);
 static int hlm_release(struct inode *, struct file *);
@@ -64,7 +65,7 @@ typedef struct _object_state{
 	int enabled;
 	struct kobject *kobj;
 	unsigned long valid[2];
-	unsigned long pending[2];
+	unsigned long pending;
 	struct element *head[2];
 	struct element *tail[2];
 	struct workqueue_struct *work_queue;
@@ -75,24 +76,34 @@ typedef struct _object_state{
 
 object_state objects[MINORS];
 
-/*
-int add_block(object_state *obj, char *buff, int len, int prt) {
+void enqueue(object_state *obj, struct element *node, int prt) {
 
 }
-*/
+
+int minimum(int a, int b) {
+	if(a < b) {
+		return a;
+	} else {
+		return b;
+	}
+}
 
 static void work_handler(struct work_struct *work_elem){
 	struct element **head;
 	struct element **tail; 
 	struct element *node;
 	int timeout;
+	int min;
+	int to_write;
 	int len;
 	struct work_data *wd = container_of((void*)work_elem,struct work_data, work);
 	int minor = wd->minor;
 	
 	object_state *obj = objects + minor;
+	atomic_dec((atomic_t*)&(obj->pending));
 	timeout = obj->timeout;
 	len = strlen(wd->data);
+	to_write = len;
 
 	printk("HLM: delayed work minor-%d\n", wd->minor);
 	mutex_lock(&(obj->mux_lock[0]));
@@ -100,19 +111,24 @@ static void work_handler(struct work_struct *work_elem){
 	head = &(obj->head[0]);
 	tail = &(obj->tail[0]);
 
-	node = kmalloc(sizeof(struct element), GFP_KERNEL);
-	node->next = NULL;
-	node->data = kmalloc(len, GFP_KERNEL);
+	while(to_write > 0) {
+		printk("HLM: adding block\n");
+		min = minimum(to_write, BLOCK_MAX_SIZE);
+		node = kmalloc(sizeof(struct element), GFP_KERNEL);
+		node->next = NULL;
+		node->data = kmalloc(min, GFP_KERNEL);
 
-	memcpy(node->data, wd->data, len);
-	if(*tail == NULL) {
-		*head = node;
-		*tail = node;
-		obj->r_pos[0] = 0;
+		memcpy(node->data, wd->data + (len - to_write), min);
+		if(*tail == NULL) {
+			*head = node;
+			*tail = node;
+			obj->r_pos[0] = 0;
+		} else {
+			(*tail)->next = node;
+			*tail = node;
+		}
 
-	} else {
-		(*tail)->next = node;
-		*tail = node;
+		to_write -= min;
 	}
 
 	obj->valid[0] += len;
@@ -151,6 +167,9 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 	int prt;
 	int timeout;
 	int block;
+	int min;
+	int to_write;
+	struct work_data * data;
 	struct element **head;
 	struct element **tail; 
 	struct element *node;
@@ -167,6 +186,7 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 	printk("%s: priority %d write called\n", MODNAME, prt);
 
 	if(prt) {
+		to_write = len;
 		mutex_lock(&(obj->mux_lock[prt]));
 		
 		if(*off >= MAX_BYTES) {
@@ -184,29 +204,36 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 
 				mutex_lock(&(obj->mux_lock[prt]));
 				if(obj->valid[prt] + len > MAX_BYTES) {
+					mutex_unlock(&(obj->mux_lock[prt]));
 					return -ENOSPC;
 				}
 			} else {
+				printk("HLM: no space %ld-%d\n", obj->valid[prt] + len, MAX_BYTES);
 				mutex_unlock(&(obj->mux_lock[prt]));
 				return -ENOSPC;
 			}
 		}
 
 		//ret = add_block(obj, buff, len, 1);
-		
-		node = kmalloc(sizeof(struct element), GFP_KERNEL);
-		node->next = NULL;
-		node->data = kmalloc(len, GFP_KERNEL);
 
-		ret = copy_from_user(node->data, buff, len);
-		if(*tail == NULL) {
-			*head = node;
-			*tail = node;
-			obj->r_pos[prt] = 0;
+		while(to_write > 0) {
+			printk("HLM: adding block\n");
+			min = minimum(to_write, BLOCK_MAX_SIZE);
+			node = kmalloc(sizeof(struct element), GFP_KERNEL);
+			node->next = NULL;
+			node->data = kmalloc(min, GFP_KERNEL);
 
-		} else {
-			(*tail)->next = node;
-			*tail = node;
+			ret = copy_from_user(node->data, buff + (len - to_write), min);
+			if(*tail == NULL) {
+				*head = node;
+				*tail = node;
+				obj->r_pos[0] = 0;
+			} else {
+				(*tail)->next = node;
+				*tail = node;
+			}
+
+			to_write -= min;
 		}
 
 		obj->valid[prt] += len;
@@ -216,7 +243,20 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 
 		return len - ret;
 	} else {
-		struct work_data * data;
+		if(obj->valid[prt] + obj->pending + len > MAX_BYTES) {
+			if(block) {
+				atomic_inc((atomic_t*)&(obj->asleep[prt]));
+				wait_event_interruptible_timeout(obj->wq_w[prt], obj->valid[prt] + obj->pending + len <= MAX_BYTES, timeout);
+				atomic_dec((atomic_t*)&(obj->asleep[prt]));
+				if(obj->valid[prt] + obj->pending + len > MAX_BYTES) {
+					return -ENOSPC;
+				}
+			} else {
+				printk("HLM: no space %ld-%d\n", obj->valid[prt] + obj->pending + len, MAX_BYTES);
+				return -ENOSPC;
+			}
+		}
+
 		data = kmalloc(sizeof(struct work_data), GFP_KERNEL);
 		data->data = kmalloc(len, GFP_KERNEL);
 		ret = copy_from_user(data->data, buff, len);
@@ -227,14 +267,12 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 
 		data->minor = minor;
 
+		atomic_inc((atomic_t*)&(obj->pending));
 		INIT_WORK(&data->work, work_handler);
 		queue_work(wq, &data->work);
 
 		return len - ret;
 	}
-
-	return 0;
-
 }
 
 static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) {
@@ -289,7 +327,7 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 
 		//Available data in the block
 		lenght = strlen(tmp->data) - obj->r_pos[prt];
-		printk("HLM: grr reading off: %lld len:%d r_pos:%d x:%d to_read: %d %s\n", *off, lenght, obj->r_pos[prt] ,x, to_read, tmp->data + obj->r_pos[prt]);
+		printk("HLM: grr reading off: %lld len:%d r_pos:%d to_read: %d %s\n", *off, lenght, obj->r_pos[prt] , to_read, tmp->data + obj->r_pos[prt]);
 		if(to_read >= lenght) {
 			x = lenght;
 
@@ -496,7 +534,6 @@ int init_module(void) {
 		for(int j = 0; j < 2; j++) {
 			obj->valid[j] = 0;
 			obj->r_pos[j] = 0;
-			obj->pending[j] = 0;
 			
 			obj->head[j] = NULL;
 			obj->tail[j] = NULL;
@@ -507,13 +544,12 @@ int init_module(void) {
 			init_waitqueue_head(&(obj->wq_r[j]));
 		}
 
+
+		obj->pending = 0;
 		obj->enabled = 1;
 		obj->timeout = 1000;
 		obj->block = 1;
-		obj->priority = 1; //TODO move to 0
-		
-		//mutex_init(&(obj->mux_lock_hi));
-		//mutex_init(&(obj->mux_lock_lo));
+		obj->priority = 0;
 
 		obj->work_queue = create_singlethread_workqueue(name);
 		if(obj->work_queue == 0) {
