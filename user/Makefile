@@ -8,3 +8,6 @@ node:
 	sudo rm ./test
 	sudo mknod test c $(A) 1
 	sudo chown $(USER) test
+create_other_node:
+	sudo mknod grrr c $(A) 2
+	sudo chown $(USER) grrr 		
