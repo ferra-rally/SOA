@@ -35,7 +35,7 @@ int main(int argc, char** argv){
         ret = write(fd, DATA, SIZE);
         printf("write ret: %d\n", ret);
 
-        pread(fd, buff, 5, 0);
+        pread(fd, buff, 5, 3);
         printf("Reading 1 %d bytes: ---\n%s\n---\n", strlen(buff), buff);
         ret = read(fd, buff2, 20);
         printf("Reading 2 %d bytes: ---%s---\n", ret, buff2);
