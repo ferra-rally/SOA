@@ -27,7 +27,7 @@ void * the_thread(void* path){
                 return NULL;
         }
 
-		self = pthread_self();
+	self = pthread_self();
         sprintf(buff, "thread\n", self);
 
         for(int i=0;i<100;i++) {

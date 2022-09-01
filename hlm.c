@@ -122,6 +122,8 @@ static void work_handler(struct work_struct *work_elem){
 
 	mutex_lock(&(obj->mux_lock[0]));
 
+	obj->valid[0] += len;
+	obj->pending -= len;
 	enqueue(obj, 0, wd->data);
 
 	mutex_unlock(&(obj->mux_lock[0]));
@@ -202,6 +204,10 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 
 	printk("%s: priority %d write called\n", MODNAME, prt);
 
+	if(len > MAX_BYTES) {
+		return -ENOSPC;
+	}
+	
 	to_write = len;
 
 	//Fragment data
@@ -224,6 +230,9 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 		}
 
 		ret += copy_from_user(node->data, buff + (len - to_write), min);
+		if(ret != 0) {
+			break;
+		}
 		to_write -= min;
 
 		if(frag_data->head == NULL) {
@@ -235,16 +244,7 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 		}
 	}
 
-	struct element *tmp = frag_data->head;
-	printk("HLM: print 1");
-	while(tmp != NULL) {
-		printk("HLM: grrr1 %s\n", tmp->data);
-		tmp = tmp->next;
-	}
-
 	if(prt) {
-		to_write = len;
-		
 		if(block) {
 			atomic_inc((atomic_t*)&(obj->asleep[prt]));
 			wait_event_interruptible_timeout(obj->wq_w[prt], can_write(obj, prt, len, 0), timeout);
@@ -252,23 +252,26 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 
 			if(obj->valid[prt] + len > MAX_BYTES) {
 				mutex_unlock(&(obj->mux_lock[prt]));
+				free_queue(frag_data->head);
+				kfree(frag_data);
 				return -ENOSPC;
 			}
 		} else {
+			mutex_lock(&(obj->mux_lock[prt]));
 			if(obj->valid[prt] + len > MAX_BYTES) {
+				mutex_unlock(&(obj->mux_lock[prt]));
+				printk("HLM: no space left %lu\n", obj->valid[prt] + len);
+				free_queue(frag_data->head);
+				kfree(frag_data);
 				return -ENOSPC;
 			}
-
-			mutex_lock(&(obj->mux_lock[prt]));
 		}
 
 		enqueue(obj, 1, frag_data);
-		obj->valid[prt] += len;
+		obj->valid[prt] += len - ret;
 
 		wake_up(&(obj->wq_r[prt]));
 		mutex_unlock(&(obj->mux_lock[prt]));
-
-		return len - ret;
 	} else {
 		data = kmalloc(sizeof(struct work_data), GFP_KERNEL);
 		if(data == NULL) {
@@ -278,6 +281,7 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 
 		data->data = frag_data;
 		data->minor = minor;
+		data->len = len - ret;
 
 		INIT_WORK(&data->work, work_handler);
 
@@ -293,22 +297,23 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 				return -ENOSPC;
 			}
 		} else {
+			mutex_lock(&(obj->mux_lock[prt]));
 			if(obj->valid[prt] + obj->pending + len > MAX_BYTES) {
+				mutex_unlock(&(obj->mux_lock[prt]));
+				printk("HLM: no space left %lu\n", obj->valid[prt] + len + obj->pending);
 				free_queue(data->data->head);
 				kfree(data->data);
 				kfree(data);
 				return -ENOSPC;
 			}
-
-			mutex_lock(&(obj->mux_lock[prt]));
 		}
 
 		obj->pending += len;
 		mutex_unlock(&(obj->mux_lock[prt]));
 		queue_work(wq, &data->work);
-
-		return len - ret;
 	}
+
+	return len - ret;
 }
 
 //Check if a reader has enough data to read
@@ -334,6 +339,7 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 	struct element **head;
 	struct element **tail; 
 	struct element *tmp;
+	struct fragment_data frag_data;
 	object_state *obj;
 	int minor = get_minor(filp);
 
@@ -347,7 +353,12 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 	block = obj->block;
 	timeout = obj->timeout;
 
-	printk("HLM: req read of %ld with %d and timeout %d valid %ld head = NULL %d?\n", len, block, timeout, obj->valid[prt], *head == NULL);
+	frag_data = kmalloc(sizeof(struct fragmented_data), GFP_KERNEL);
+	if(frag_data == NULL) {
+		return -1;
+	}
+
+	printk("HLM: req read %d of %ld with %d and timeout %d valid %ld head = NULL %d?\n", prt, len, block, timeout, obj->valid[prt], *head == NULL);
 
     // Even if there is not enough data, execute a partial read
 	if(block) {
@@ -358,11 +369,19 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 		mutex_lock(&(obj->mux_lock[prt]));
 	}
 
+	//mutex_lock(&(obj->mux_lock[prt]));
+	printk("HLM: to read %d valid %d\n", to_read, obj->valid[prt]);
+
 	obj->r_pos[prt] += *off;
 
-	printk("HLM: to read %d-%d\n", to_read, *head != NULL);
+	while(to_read > 0 && obj->head[prt] != NULL) {
 
-	while(to_read > 0 && *head != NULL) {
+		//TODO remove
+		if(obj->valid[prt] > MAX_BYTES) {
+			mutex_unlock(&(obj->mux_lock[prt]));
+			return -2;
+		}
+
 		tmp = *head;
 
 		//Available data in the block
@@ -402,6 +421,7 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 		to_read -= x;
 	}
 
+	printk("HLM: valid update %lu - %lu\n", obj->valid[prt], len - to_read);
 	obj->valid[prt] -= len - to_read;
 
 	mutex_unlock(&(obj->mux_lock[prt]));
@@ -668,6 +688,8 @@ void cleanup_module(void) {
 				kfree(tmp->data);
 				kfree(tmp);
 			}
+
+			free_queue(obj->head[j]);
 		}
 
 		destroy_workqueue(obj->work_queue);
