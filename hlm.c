@@ -18,7 +18,7 @@ MODULE_AUTHOR("Daniele Ferrarelli");
 
 
 #define MODNAME "HLM"
-#define MAX_BYTES 50
+#define MAX_BYTES 500
 #define BLOCK_MAX_SIZE 10
 
 static int hlm_open(struct inode *, struct file *);
@@ -339,7 +339,6 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 	struct element **head;
 	struct element **tail; 
 	struct element *tmp;
-	struct fragment_data frag_data;
 	object_state *obj;
 	int minor = get_minor(filp);
 
@@ -352,11 +351,6 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 
 	block = obj->block;
 	timeout = obj->timeout;
-
-	frag_data = kmalloc(sizeof(struct fragmented_data), GFP_KERNEL);
-	if(frag_data == NULL) {
-		return -1;
-	}
 
 	printk("HLM: req read %d of %ld with %d and timeout %d valid %ld head = NULL %d?\n", prt, len, block, timeout, obj->valid[prt], *head == NULL);
 
@@ -375,13 +369,6 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 	obj->r_pos[prt] += *off;
 
 	while(to_read > 0 && obj->head[prt] != NULL) {
-
-		//TODO remove
-		if(obj->valid[prt] > MAX_BYTES) {
-			mutex_unlock(&(obj->mux_lock[prt]));
-			return -2;
-		}
-
 		tmp = *head;
 
 		//Available data in the block
@@ -557,6 +544,7 @@ static ssize_t sysfs_store(struct kobject *kobj, struct kobj_attribute *attr,con
 	} else if(!strcmp(attr->attr.name, "priority")) {
 		obj->priority = in;
 	}
+	
     return count;
 }
 
@@ -681,14 +669,6 @@ void cleanup_module(void) {
 
 		// Empty queue
 		for(int j = 0; j < 2; j++) {
-			node = obj->head[j];
-			while(node != NULL) {
-				struct element *tmp = node;
-				node = node->next;
-				kfree(tmp->data);
-				kfree(tmp);
-			}
-
 			free_queue(obj->head[j]);
 		}
 
