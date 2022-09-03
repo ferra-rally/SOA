@@ -5,6 +5,8 @@ all:
 	gcc utility.c -o utility
 	gcc tests.c -lpthread  -o tests
 	gcc timing.c -lpthread -o timing
+	gcc cli.c -o hlm_cli
+
 node:
 	sudo rm ./test
 	sudo mknod test c $(A) 1

@@ -10,7 +10,23 @@
 \maketitle
 
 \section{Introduzione}
-\section{Scelte Implementative}
-\section{VFS}
+Il progetto consiste in un device driver che implementi un flow di dati con due priorità diverse. Quello ad alta priorità.
 
+\section{Scelte Implementative}
+I device sono costituiti da una serie di liste collegate che mantengono i dati scritti sul device. Ogni scrittura andrà ad aggiungersi in coda del device corrispondente al minor number e nel flow corrispondente alla priorità. I dati nel device driver sono divisi in blocchi con una grandezza massima. Questo è stato fatto poiché l'utilizzo di un singolo buffer poteva essere limitante. I blocchi hanno dimensione variabile a seconda della grandezza della scrittura. Al momento di una scrittura i dati verranno frammentati in una serie di blocchi, questo viene fatto per evitare di allocare spazio che supera la capacità di kmalloc e per diminuire lo sprecho dei buffer quando si va a leggere parzialmente un blocco, visto che rimane allocato anche se ha solo una parte dei suoi dati disponibili. I dati vengono frammentati all'inizio della scrittura per limitare la lunghezza della sezione critica.
+
+Per mantenere i metadati di un flow si utilizza una struttura che mantiene i byte validi in ogni momento. Inoltre si mantengono i byte pendenti che verranno aggiunti tramite deferred work.
+
+Il flow viene sincronizzato tramite un mutex che deve essere ottenuto per modificare la lista e per controllare il numero di byte presenti in essa.
+
+
+Le chiamate bloccanti vengono implementate tramite la macro wait\_queue\_interruptible\_timeout, al suo interno si utilizza una funzione che andrà a controllare se ci sono byte disponibili (lettura) o se si ha abbastanza spazio disponibile (scrittura). Queste funzioni andranno a prendere il lock che verrà rilasciato se la condizioni è negativa, altrimenti verrà mantenuto ed utilizzato per dalla funzione di scrittura o lettura.
+
+La lettura avviene nello stesso modo per entrambe le priorità. Per la lettura si ottiene il lock della lista e si andrà a leggere i vari blocchi.
+
+\section{Parametri}
+I parametri del modulo sono il numero massimo di byte presenti in ciascun flow e il numero di byte per ciascun blocco.
+
+\section{VFS}
+Vengono mantenuti una serie di parametri e statistiche che riguradano i vari flow di dati tramite il SYSFS. Viene creata una cartella al di sotto di /sys in cui sono presenti cartelle per tutti i minor number disponibili. Per ogni device sono presenti il numero di thread dormienti ed il numero di byte validi per entrambe le priorità. Inoltre sono presenti anche valori che indicano se il device è abilitato, se è bloccante, la sua priorità ed il suo timeout.
 \end{document}
