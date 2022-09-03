@@ -98,8 +98,8 @@ typedef struct _object_state{
 	//Lock used for syncronization, 1 for each priority
 	struct mutex mux_lock[2];
 	//Wait queues for writing and reading threads
-	wait_queue_head_t wq_w[2];
-	wait_queue_head_t wq_r[2];
+	wait_queue_head_t wq_w;
+	wait_queue_head_t wq_r;
 } object_state;
 
 object_state objects[MINORS];
@@ -154,7 +154,7 @@ static void work_handler(struct work_struct *work_elem){
 	enqueue(obj, 0, wd->data);
 
 	mutex_unlock(&(obj->mux_lock[0]));
-	wake_up(&(obj->wq_r[0]));
+	wake_up(&(obj->wq_r));
 
 	kfree(wd->data);
 	kfree(work_elem);
@@ -259,7 +259,7 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 	if(prt) {
 		if(block) {
 			atomic_inc((atomic_t*)&(obj->asleep[prt]));
-			wait_event_interruptible_timeout(obj->wq_w[prt], can_write(obj, prt, len, 0), timeout);
+			wait_event_interruptible_timeout(obj->wq_w, can_write(obj, prt, len, 0), timeout);
 			atomic_dec((atomic_t*)&(obj->asleep[prt]));
 
 			if(obj->valid[prt] + len > max_bytes) {
@@ -282,7 +282,7 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 		enqueue(obj, 1, frag_data);
 		obj->valid[prt] += len - ret;
 
-		wake_up(&(obj->wq_r[prt]));
+		wake_up(&(obj->wq_r));
 		mutex_unlock(&(obj->mux_lock[prt]));
 	} else {
 		//Prepare work data
@@ -300,7 +300,7 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 
 		if(block) {
 			atomic_inc((atomic_t*)&(obj->asleep[prt]));
-			wait_event_interruptible_timeout(obj->wq_w[prt], can_write(obj, prt, len, obj->pending), timeout);
+			wait_event_interruptible_timeout(obj->wq_w, can_write(obj, prt, len, obj->pending), timeout);
 			atomic_dec((atomic_t*)&(obj->asleep[prt]));
 			if(obj->valid[prt] + obj->pending + len > max_bytes) {
 				mutex_unlock(&(obj->mux_lock[prt]));
@@ -364,10 +364,15 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 	block = obj->block;
 	timeout = obj->timeout;
 
+	//Offset can't be negative because the data is canceled
+	if(*off < 0) {
+		return -1;
+	}
+
     // Even if there is not enough data, execute a partial read
 	if(block) {
 		atomic_inc((atomic_t*)&(obj->asleep[prt]));
-		wait_event_interruptible_timeout(obj->wq_r[prt], can_read(obj, to_read, off, prt), timeout);
+		wait_event_interruptible_timeout(obj->wq_r, can_read(obj, to_read, off, prt), timeout);
 		atomic_dec((atomic_t*)&(obj->asleep[prt]));
 	} else {
 		mutex_lock(&(obj->mux_lock[prt]));
@@ -422,7 +427,7 @@ static ssize_t hlm_read(struct file *filp, char *buff, size_t len, loff_t *off) 
 	obj->valid[prt] -= len - to_read;
 
 	mutex_unlock(&(obj->mux_lock[prt]));
-	wake_up(&(obj->wq_w[prt]));
+	wake_up(&(obj->wq_w));
 
 	return len - to_read;
 }
@@ -611,11 +616,11 @@ int init_module(void) {
 			obj->tail[j] = NULL;
 
 			mutex_init(&(obj->mux_lock[j]));
-
-			init_waitqueue_head(&(obj->wq_w[j]));
-			init_waitqueue_head(&(obj->wq_r[j]));
 		}
 
+
+		init_waitqueue_head(&(obj->wq_w));
+		init_waitqueue_head(&(obj->wq_r));
 
 		obj->pending = 0;
 		obj->enabled = 1;

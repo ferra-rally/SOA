@@ -1,5 +1,6 @@
 \documentclass[a4paper,10pt]{article}
 \usepackage[utf8]{inputenc}
+\usepackage{tabularx}
 
 %opening
 \title{Report Progetto Sistemi Operativi Avanzati}
@@ -10,23 +11,80 @@
 \maketitle
 
 \section{Introduzione}
-Il progetto consiste in un device driver che implementi un flow di dati con due priorità diverse. Quello ad alta priorità.
+Il progetto consiste in un device driver che implementa due flow di dati con diverse gestioni delle scritture. Il flow a bassa priorità viene gestito tramite deferred work. Entrambi i flow sono sincronizzati per scritture e letture. Le operazioni di scrittura avvengono nella coda del flow, mentre le operazioni di lettura avvengono in testa. Il driver supporta 128 device diversi identificati tramite il loro minor number e pone un limite al numero massimo di byte presente in ogni flow di ogni device, questo è configurabile tramite parametro del modulo.
+
+\subsection{Stato del deivce}
+Lo stato di ogni device viene mantenuto utilizzando una struttura che contiene al suo interno i metadati del device, come per esempio il numero di byte validi o il numero di byte che verranno aggiunti tramte deferred work.
+
+Viene inoltre mantenuto un indice che permette di ottenere fino a che punto è avvenuta la lettura sul primo blocco del flow. Questo viene fatto poichè in caso di letture parziali di un blocco bisogna tenere traccia dei byte che sono stati già letti.
 
 \section{Scelte Implementative}
-I device sono costituiti da una serie di liste collegate che mantengono i dati scritti sul device. Ogni scrittura andrà ad aggiungersi in coda del device corrispondente al minor number e nel flow corrispondente alla priorità. I dati nel device driver sono divisi in blocchi con una grandezza massima. Questo è stato fatto poiché l'utilizzo di un singolo buffer poteva essere limitante. I blocchi hanno dimensione variabile a seconda della grandezza della scrittura. Al momento di una scrittura i dati verranno frammentati in una serie di blocchi, questo viene fatto per evitare di allocare spazio che supera la capacità di kmalloc e per diminuire lo sprecho dei buffer quando si va a leggere parzialmente un blocco, visto che rimane allocato anche se ha solo una parte dei suoi dati disponibili. I dati vengono frammentati all'inizio della scrittura per limitare la lunghezza della sezione critica.
+Il driver per implementare queste funzionalità utilizzerà una serie di liste collegate che vengono sincronizzate in lettura e scrittura tramite mutex. Queste liste vengono mantenuto nella struttura dati che contiene i metadati del device.
 
-Per mantenere i metadati di un flow si utilizza una struttura che mantiene i byte validi in ogni momento. Inoltre si mantengono i byte pendenti che verranno aggiunti tramite deferred work.
+\subsection{Scrittura}
+La prima fase della scrittura consiste nel creare una serie di nodi della lista collegata separando in più nodi i dati in input al driver. Questo viene fatto per rientrare nei limite della chiamata kmalloc che viene utilizzata per allocare i buffer. Dalla prima fase della scrittura si produrrano una lista collegata con nodi di dimensione minore o uguale alla massima dimensione permessa per ogni nodo (impostata tramite parametro del modulo).
 
-Il flow viene sincronizzato tramite un mutex che deve essere ottenuto per modificare la lista e per controllare il numero di byte presenti in essa.
+La scrittura nel device avviene secondo due metodi diversi a seconda della priorità corrente del device.
+Nel caso sia una scrittura a bassa priorità si utilizzerà una work queue per aggiungere i dati al flow tramite un work handler, questa work queue è single thread e privata per ogni device.
 
+Nel caso sia una scrittura ad alta priorità si andrà ad aggiungere direttamente gli elementi alla lista collegata che implementa il flow.
 
-Le chiamate bloccanti vengono implementate tramite la macro wait\_queue\_interruptible\_timeout, al suo interno si utilizza una funzione che andrà a controllare se ci sono byte disponibili (lettura) o se si ha abbastanza spazio disponibile (scrittura). Queste funzioni andranno a prendere il lock che verrà rilasciato se la condizioni è negativa, altrimenti verrà mantenuto ed utilizzato per dalla funzione di scrittura o lettura.
+Nel caso sia impostata una chiamata bloccante si utilizza la macro \\wait\_queue\_interruptible\_timeout per bloccare il device fino a che si ha abbastanza spazio per scrivere o il timeout scade. Per eseguire questo controllo si utilizza la funzione can\_write che andrà a controllare il numero di byte validi, il numero di byte che devono essere aggiunti tramite deferred work e il numero di byte da scrivere. Al suo interno si ottiene il lock sul flow dei dati per controllare lo device, se si può scrivere verrà mantenuto il lock per aggiornare lo stato del dispositivo, in caso contrario verrà restituito l'errore -ENOSPC. I thread vengono aggiunti ad una wait queue privata per ogni device e vengono risvegliati al momento di una lettura che potrebbe aver liberato abbastanza spazio per eseguire la scrittura.
 
-La lettura avviene nello stesso modo per entrambe le priorità. Per la lettura si ottiene il lock della lista e si andrà a leggere i vari blocchi.
+\subsection{Lettura}
+La lettura avviene nello stesso modo per entrambe le priorità implementate. Si andrà a prendere il lock per poi andare a scorrere la lista e prelevare il numero corretto di byte dal flow. Si utilizzerà poi copy\_to\_user per copiarli nel buffer di lettura. Nel caso un nodo venga completamente letto si andrà a liberare i buffer dei nodi utilizzando la chiamata kfree, altrimenti si andrà ad aggiornare un valore che indica fino a che punto è avvenuta la lettura sul blocco corrente.
 
-\section{Parametri}
-I parametri del modulo sono il numero massimo di byte presenti in ciascun flow e il numero di byte per ciascun blocco.
+Nel caso sia una chiamata bloccante si utilizzerà la macro \\wait\_queue\_interruptible\_timeout per bloccare i thread su una wait queue finchè non sono disponibili abbastanza dati o il timeout scade. Al termine del timeout se non si hanno ancora abbastanza dati si andrà eseguire una lettura parziale dei dati. I thread vengono risvegliati al momento di una scrittura che andrà ad inserire abbastanza dati all'interno del flow. Stessa cosa succede nel caso di chiamate non bloccanti.
+
 
 \section{VFS}
-Vengono mantenuti una serie di parametri e statistiche che riguradano i vari flow di dati tramite il SYSFS. Viene creata una cartella al di sotto di /sys in cui sono presenti cartelle per tutti i minor number disponibili. Per ogni device sono presenti il numero di thread dormienti ed il numero di byte validi per entrambe le priorità. Inoltre sono presenti anche valori che indicano se il device è abilitato, se è bloccante, la sua priorità ed il suo timeout.
+Tramite SYSFS vengono esposte le configurazioni dei vari device e le loro statistiche. Per fare ciò si crea la cartella /sys/hlm che contiene una serie di cartelle riguardanti tutti i minor number supportati. All'interno di queste cartelle sono presenti file che rappresentano lo stato del device (timeout, block, enabled, priority) e le statistiche per ogni device (asleep\_hi, asleep\_lo, bytes\_lo, bytes\_hi).
+
+\section{User}
+E' stata creata una cli per permettere di interagire con i flow del device driver. Per utilizzarla bisognerà andare ad eseguire la cli con primo argomento il path dell'file che utilizzerà il driver. Per creare file si può utilizzare lo script create\_node.sh. Questo script prenderà in input il nome del file da creare ed il minor number da assegnare.
+
+
+% \section{Testing}
+% Per testare il sistema si è misurato il tempo necessario per scritture e lettura. I casi analizzati sono:
+% \begin{enumerate}
+%
+%     \item Scrittura con grandezza minore a quella massima di un nodo
+%     \item Scrittura con grandezza maggiore a quella massima di un nodo
+%     \item Lettura con grandezza minore a quella massima di un nodo
+%     \item Scrittura con grandezza maggiore a quella massima di un nodo
+% \end{enumerate}
+%
+% Questi test sono stati ripetuti singolarmente e in un ambiente con 10 thread che generano traffico per entrambe le priorità. I tempi vengono ottenuti eseguendo 200 letture/scrtture di dati di grandezza di 10 byte e 120 byte. La grandezza massima di un blocco durante i test è di 50 byte.
+%
+% \begin{tabularx}{0.8\textwidth} {
+%   | >{\raggedright\arraybackslash}X
+%   | >{\centering\arraybackslash}X
+%   | >{\raggedleft\arraybackslash}X | }
+%  \hline
+%   Priorità bassa, tempo in s & tempo senza traffico & tempo con traffico \\
+%  \hline
+%  Scrittura (1)  & 0.000015  & 0.003309  \\
+%  Scrittura (2)  & 0.000600  & 0.002834  \\
+%  Lettura (3)  & 0.000467  & 0.000599  \\
+%  Lettura (4)  & 0.000424  & 0.000474  \\
+% \hline
+% \end{tabularx}
+%
+% \begin{tabularx}{0.8\textwidth} {
+%   | >{\raggedright\arraybackslash}X
+%   | >{\centering\arraybackslash}X
+%   | >{\raggedleft\arraybackslash}X | }
+%  \hline
+%   Priorità alta, tempo in s & tempo senza traffico & tempo con traffico \\
+%  \hline
+%  Scrittura (1)  & 0.000006  & 0.003269  \\
+%  Scrittura (2)  & 0.000750  & 0.001496  \\
+%  Lettura (3)  & 0.000456  & 0.001009  \\
+%  Lettura (4)  & 0.000458  & 0.000512  \\
+% \hline
+% \end{tabularx}
+%
+% Da questi risultati si può vedere come le piccole scritture siano molto veloci, mentre le letture risultano essere di velocità simile sia con traffico che senza, indipendentemente dalla priorità.
+%
+%
 \end{document}

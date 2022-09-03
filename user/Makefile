@@ -14,3 +14,6 @@ node:
 create_other_node:
 	sudo mknod grrr c $(A) 2
 	sudo chown $(USER) grrr 		
+
+clean:
+	rm ./user ./tests ./utility ./hlm_cli

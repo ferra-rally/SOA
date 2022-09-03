@@ -2,6 +2,10 @@ the_hlm.ko
 the_hlm.mod
 the_hlm.mod.c
 the_hlm.mod.o
+.the_hlm.ko.cmd
+.the_hlm.mod
+.the_hlm.mod.c
+.the_hlm.mod.o
 hlm.o
 hlm.prelink.o
 modules.order
@@ -9,4 +13,6 @@ Module.symvers
 user/a.out
 user/test
 user/utility
-
+user/timing
+user/timing.c
+user/hlm_cli
