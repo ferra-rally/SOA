@@ -36,7 +36,6 @@ void * the_thread(void* path){
 
         while(1) {
         	ret = write(fd,buff,strlen(buff));
-                flush
         	sleep(1);
      	}
         return NULL;

@@ -161,14 +161,18 @@ static void work_handler(struct work_struct *work_elem){
     return;
 }
 
+int space_available(object_state *obj, int prt) {
+	if(prt) return obj->valid[prt];
+	else return obj->valid[prt] + obj->pending;
+
+	return 0;
+}
+
 // Function that checks if there is enough space to write
-int can_write(object_state *obj, int prt, int len, int pending) {
+int can_write(object_state *obj, int prt, int len) {
 	mutex_lock(&(obj->mux_lock[prt]));
 	
-	if(obj->valid[prt] + len + pending <= max_bytes) {
-		//Maintains lock if the writer can write
-		return 1;
-	}
+	if(space_available(obj, prt) + len <= max_bytes) return 1;
 
 	mutex_unlock(&(obj->mux_lock[prt]));
 	return 0;
@@ -187,6 +191,7 @@ void free_queue(struct element *head) {
 		curr = tmp;
 	}
 }
+
 
 static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t *off) {
 	int ret;
@@ -226,8 +231,8 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 		if(node == NULL) {
 			printk("%s: problem when allocating memory\n", MODNAME);
 			free_queue(frag_data->head);
-			kfree(frag_data);	
-			break;
+			kfree(frag_data);
+			return -ENOMEM;
 		}
 
 		node->next = NULL;
@@ -237,15 +242,16 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 			printk("%s: problem when allocating memory\n", MODNAME);
 			free_queue(frag_data->head);
 			kfree(frag_data);
-			break;
+			return -ENOMEM;
 		}
 
 		ret += copy_from_user(node->data, buff + (len - to_write), min);
 		if(ret != 0) {
-			break;
+			node->len -= ret;
+			to_write = 0;
+		} else {
+			to_write -= min;
 		}
-
-		to_write -= min;
 
 		if(frag_data->head == NULL) {
 			frag_data->head = node;
@@ -256,39 +262,38 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 		}
 	}
 
-	if(prt) {
-		if(block) {
-			atomic_inc((atomic_t*)&(obj->asleep[prt]));
-			wait_event_interruptible_timeout(obj->wq_w, can_write(obj, prt, len, 0), timeout);
-			atomic_dec((atomic_t*)&(obj->asleep[prt]));
+	if(block) {
+		atomic_inc((atomic_t*)&(obj->asleep[prt]));
+		wait_event_interruptible_timeout(obj->wq_w, can_write(obj, prt, len), timeout);
+		atomic_dec((atomic_t*)&(obj->asleep[prt]));
 
-			if(obj->valid[prt] + len > max_bytes) {
-				mutex_unlock(&(obj->mux_lock[prt]));
-				free_queue(frag_data->head);
-				kfree(frag_data);
-				return -ENOSPC;
-			}
-		} else {
-			mutex_lock(&(obj->mux_lock[prt]));
-			if(obj->valid[prt] + len > max_bytes) {
-				mutex_unlock(&(obj->mux_lock[prt]));
-				printk("HLM: no space left %lu\n", obj->valid[prt] + len);
-				free_queue(frag_data->head);
-				kfree(frag_data);
-				return -ENOSPC;
-			}
+		if(space_available(obj, prt) + len > max_bytes) {
+			mutex_unlock(&(obj->mux_lock[prt]));
+			free_queue(frag_data->head);
+			kfree(frag_data);
+			return -ENOSPC;
 		}
+	} else {
+		mutex_lock(&(obj->mux_lock[prt]));
 
+		if(space_available(obj, prt) + len > max_bytes) {
+			mutex_unlock(&(obj->mux_lock[prt]));
+			free_queue(frag_data->head);
+			kfree(frag_data);
+			return -ENOSPC;
+		}
+	}
+
+	if(prt) {
 		enqueue(obj, 1, frag_data);
 		obj->valid[prt] += len - ret;
-
-		wake_up(&(obj->wq_r));
-		mutex_unlock(&(obj->mux_lock[prt]));
 	} else {
 		//Prepare work data
 		data = kmalloc(sizeof(struct work_data), GFP_KERNEL);
 		if(data == NULL) {
-			printk("%s: problem when allocating memory\n", MODNAME);
+			mutex_unlock(&(obj->mux_lock[prt]));
+			free_queue(frag_data->head);
+			kfree(frag_data);
 			return -ENOMEM;
 		}
 
@@ -297,33 +302,12 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 		data->len = len - ret;
 
 		INIT_WORK(&data->work, work_handler);
-
-		if(block) {
-			atomic_inc((atomic_t*)&(obj->asleep[prt]));
-			wait_event_interruptible_timeout(obj->wq_w, can_write(obj, prt, len, obj->pending), timeout);
-			atomic_dec((atomic_t*)&(obj->asleep[prt]));
-			if(obj->valid[prt] + obj->pending + len > max_bytes) {
-				mutex_unlock(&(obj->mux_lock[prt]));
-				free_queue(data->data->head);
-				kfree(data->data);
-				kfree(data);
-				return -ENOSPC;
-			}
-		} else {
-			mutex_lock(&(obj->mux_lock[prt]));
-			if(obj->valid[prt] + obj->pending + len > max_bytes) {
-				mutex_unlock(&(obj->mux_lock[prt]));
-				free_queue(data->data->head);
-				kfree(data->data);
-				kfree(data);
-				return -ENOSPC;
-			}
-		}
-
 		obj->pending += len;
-		mutex_unlock(&(obj->mux_lock[prt]));
 		queue_work(wq, &data->work);
 	}
+
+	wake_up(&(obj->wq_r));
+	mutex_unlock(&(obj->mux_lock[prt]));
 
 	return len - ret;
 }
