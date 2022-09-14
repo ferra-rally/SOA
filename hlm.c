@@ -281,7 +281,7 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 	} else {
 		mutex_lock(&(obj->mux_lock[prt]));
 
-		if(space_available(obj, prt) + len > max_bytes) {
+		if(space_available(obj, prt) + (len - ret) > max_bytes) {
 			mutex_unlock(&(obj->mux_lock[prt]));
 			free_queue(frag_data->head);
 			kfree(frag_data);
@@ -307,7 +307,7 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 		data->len = len - ret;
 
 		INIT_WORK(&data->work, work_handler);
-		obj->pending += len;
+		obj->pending += len - ret;
 		queue_work(wq, &data->work);
 	}
 
