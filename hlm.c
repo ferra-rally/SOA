@@ -223,6 +223,11 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 
 	//Fragment data and store in the fragmented_data struct
 	frag_data = kmalloc(sizeof(struct fragmented_data), GFP_KERNEL);
+	if(frag_data == NULL) {
+		printk("%s: problem when allocating memory\n", MODNAME);
+		return -ENOMEM;
+	}
+
 	frag_data->head = NULL;
 	while(to_write > 0) {
 		//Find the lenght of the block to write
@@ -236,9 +241,9 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 		}
 
 		node->next = NULL;
-		node->data = kmalloc(min, GFP_KERNEL);
 		node->len = min;
-		if(node == NULL) {
+		node->data = kmalloc(min, GFP_KERNEL);
+		if(node->data == NULL) {
 			printk("%s: problem when allocating memory\n", MODNAME);
 			free_queue(frag_data->head);
 			kfree(frag_data);
