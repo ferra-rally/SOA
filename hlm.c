@@ -164,8 +164,6 @@ static void work_handler(struct work_struct *work_elem){
 int space_occupied(object_state *obj, int prt) {
 	if(prt) return obj->valid[prt];
 	else return obj->valid[prt] + obj->pending;
-
-	return 0;
 }
 
 // Function that checks if there is enough space to write
@@ -224,7 +222,6 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 	//Fragment data and store in the fragmented_data struct
 	frag_data = kmalloc(sizeof(struct fragmented_data), GFP_KERNEL);
 	if(frag_data == NULL) {
-		printk("%s: problem when allocating memory\n", MODNAME);
 		return -ENOMEM;
 	}
 
@@ -234,7 +231,6 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 		min = minimum(to_write, block_max_size);
 		node = kmalloc(sizeof(struct element), GFP_KERNEL);
 		if(node == NULL) {
-			printk("%s: problem when allocating memory\n", MODNAME);
 			free_queue(frag_data->head);
 			kfree(frag_data);
 			return -ENOMEM;
@@ -244,7 +240,6 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 		node->len = min;
 		node->data = kmalloc(min, GFP_KERNEL);
 		if(node->data == NULL) {
-			printk("%s: problem when allocating memory\n", MODNAME);
 			free_queue(frag_data->head);
 			kfree(frag_data);
 			kfree(node);
@@ -312,8 +307,8 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 		queue_work(wq, &data->work);
 	}
 
-	wake_up(&(obj->wq_r));
 	mutex_unlock(&(obj->mux_lock[prt]));
+	wake_up(&(obj->wq_r));
 
 	return len - ret;
 }
