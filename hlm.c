@@ -308,7 +308,6 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 	}
 
 	mutex_unlock(&(obj->mux_lock[prt]));
-	wake_up(&(obj->wq_r));
 
 	return len - ret;
 }
