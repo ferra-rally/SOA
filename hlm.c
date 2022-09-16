@@ -161,7 +161,7 @@ static void work_handler(struct work_struct *work_elem){
     return;
 }
 
-int space_available(object_state *obj, int prt) {
+int space_occupied(object_state *obj, int prt) {
 	if(prt) return obj->valid[prt];
 	else return obj->valid[prt] + obj->pending;
 
@@ -172,13 +172,13 @@ int space_available(object_state *obj, int prt) {
 int can_write(object_state *obj, int prt, int len) {
 	mutex_lock(&(obj->mux_lock[prt]));
 	
-	if(space_available(obj, prt) + len <= max_bytes) return 1;
+	if(space_occupied(obj, prt) + len <= max_bytes) return 1;
 
 	mutex_unlock(&(obj->mux_lock[prt]));
 	return 0;
 }
 
-//Function that frees the queue
+// Function that frees the queue
 void free_queue(struct element *head) {
 	struct element *curr = head;
 	struct element *tmp;
@@ -247,6 +247,7 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 			printk("%s: problem when allocating memory\n", MODNAME);
 			free_queue(frag_data->head);
 			kfree(frag_data);
+			kfree(node);
 			return -ENOMEM;
 		}
 
@@ -272,7 +273,7 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 		wait_event_interruptible_timeout(obj->wq_w, can_write(obj, prt, len), timeout);
 		atomic_dec((atomic_t*)&(obj->asleep[prt]));
 
-		if(space_available(obj, prt) + len > max_bytes) {
+		if(space_occupied(obj, prt) + (len - ret) > max_bytes) {
 			mutex_unlock(&(obj->mux_lock[prt]));
 			free_queue(frag_data->head);
 			kfree(frag_data);
@@ -281,7 +282,7 @@ static ssize_t hlm_write(struct file *filp, const char *buff, size_t len, loff_t
 	} else {
 		mutex_lock(&(obj->mux_lock[prt]));
 
-		if(space_available(obj, prt) + (len - ret) > max_bytes) {
+		if(space_occupied(obj, prt) + (len - ret) > max_bytes) {
 			mutex_unlock(&(obj->mux_lock[prt]));
 			free_queue(frag_data->head);
 			kfree(frag_data);
